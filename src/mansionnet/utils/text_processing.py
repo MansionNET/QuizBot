@@ -1,103 +1,119 @@
-"""Text processing utilities for the QuizBot."""
-from typing import Tuple
+"""Text processing utilities for quiz game."""
+from difflib import SequenceMatcher
+from typing import Tuple, Dict, Set
 import re
 
-def normalize_text(text: str) -> str:
-    """Normalize text for comparison."""
-    # Remove extra whitespace
-    text = ' '.join(text.split())
-    # Convert to lowercase
-    text = text.lower()
-    # Remove special characters
-    text = re.sub(r'[^a-z0-9\s]', '', text)
-    return text
-
-def calculate_similarity(str1: str, str2: str) -> float:
-    """Calculate similarity between two strings."""
-    str1 = normalize_text(str1)
-    str2 = normalize_text(str2)
+class AnswerMatcher:
+    """Improved answer matching system with support for variations and alternatives."""
     
-    # Direct match
-    if str1 == str2:
-        return 1.0
-    
-    # Length similarity
-    len_ratio = min(len(str1), len(str2)) / max(len(str1), len(str2))
-    
-    # Character similarity using Levenshtein distance
-    distance = levenshtein_distance(str1, str2)
-    max_length = max(len(str1), len(str2))
-    similarity = 1 - (distance / max_length)
-    
-    # Combined similarity score
-    return (len_ratio + similarity) / 2
-
-def levenshtein_distance(s1: str, s2: str) -> int:
-    """Calculate the Levenshtein distance between two strings."""
-    if len(s1) < len(s2):
-        return levenshtein_distance(s2, s1)
-    
-    if len(s2) == 0:
-        return len(s1)
-    
-    previous_row = range(len(s2) + 1)
-    for i, c1 in enumerate(s1):
-        current_row = [i + 1]
-        for j, c2 in enumerate(s2):
-            insertions = previous_row[j + 1] + 1
-            deletions = current_row[j] + 1
-            substitutions = previous_row[j] + (c1 != c2)
-            current_row.append(min(insertions, deletions, substitutions))
-        previous_row = current_row
-    
-    return previous_row[-1]
-
-def is_answer_match(user_answer: str, correct_answer: str, threshold: float = 0.85) -> bool:
-    """Determine if a user's answer matches the correct answer."""
-    # Normalize both answers
-    user_answer = normalize_text(user_answer)
-    correct_answer = normalize_text(correct_answer)
-    
-    # Check for exact match
-    if user_answer == correct_answer:
-        return True
-    
-    # Check for plural/singular variations
-    if user_answer + 's' == correct_answer or user_answer == correct_answer + 's':
-        return True
-    
-    # Check for substring match (if answer is long enough)
-    if len(user_answer) > 3 and (user_answer in correct_answer or correct_answer in user_answer):
-        return True
-    
-    # Calculate similarity for longer answers
-    if len(user_answer) > 3 and len(correct_answer) > 3:
-        similarity = calculate_similarity(user_answer, correct_answer)
-        return similarity >= threshold
-    
-    return False
-
-def format_time(seconds: int) -> str:
-    """Format time duration in a human-readable way."""
-    if seconds < 60:
-        return f"{seconds} second{'s' if seconds != 1 else ''}"
-    minutes = seconds // 60
-    remaining_seconds = seconds % 60
-    if remaining_seconds == 0:
-        return f"{minutes} minute{'s' if minutes != 1 else ''}"
-    return f"{minutes}m {remaining_seconds}s"
-
-def truncate_text(text: str, max_length: int = 100, suffix: str = '...') -> str:
-    """Truncate text to a maximum length while preserving words."""
-    if len(text) <= max_length:
+    def __init__(self):
+        self.variations = {
+            # Companies and Platforms
+            "google": {"alphabet", "google inc", "google inc.", "google corporation"},
+            "meta": {"facebook", "meta platforms", "fb", "facebook inc", "meta inc"},
+            "microsoft": {"ms", "microsoft corporation", "microsoft corp"},
+            "apple": {"apple inc", "apple computer", "apple computers"},
+            "epic games": {"epic", "epic store", "epic launcher"},
+            "disney+": {"disney", "disney plus", "disneyplus"},
+            "netflix": {"netflix inc", "netflix streaming"},
+            
+            # Gaming
+            "playstation": {"ps", "ps1", "ps2", "ps3", "ps4", "ps5", "sony playstation"},
+            "xbox": {"microsoft xbox", "xbox console"},
+            "nintendo": {"nintendo co", "nintendo corporation"},
+            "minecraft": {"mine craft"},
+            
+            # Historical/Famous People
+            "thomas edison": {"edison", "thomas a edison", "t edison"},
+            "leonardo da vinci": {"da vinci", "davinci", "leonardo", "leonardo davinci"},
+            
+            # Sports and Events
+            "olympics": {"olympic games", "olympic", "the olympics"},
+            "world cup": {"fifa world cup", "soccer world cup", "football world cup"},
+            
+            # Technology
+            "artificial intelligence": {"ai"},
+            "virtual reality": {"vr"},
+            "operating system": {"os"},
+            
+            # Elements and Materials
+            "silicon": {"si", "silicon semiconductor"},
+            "nitrogen": {"n2", "n"},
+            "oxygen": {"o2", "o"},
+            
+            # Countries and Organizations
+            "united states": {"usa", "us", "united states of america", "america"},
+            "united kingdom": {"uk", "britain", "great britain"},
+            "european union": {"eu"},
+            "soviet union": {"ussr", "soviet", "russia"}
+        }
+        
+        # Build reverse lookup for variations
+        self.reverse_variations = {}
+        for main, variants in self.variations.items():
+            for variant in variants:
+                self.reverse_variations[variant] = main
+                
+    def normalize_text(self, text: str) -> str:
+        """Normalize text for comparison."""
+        text = text.lower().strip()
+        text = re.sub(r'[^\w\s-]', '', text)
+        text = re.sub(r'\s+', ' ', text)
         return text
         
-    truncated = text[:max_length-len(suffix)].rsplit(' ', 1)[0]
-    return truncated + suffix
+    def get_similarity_ratio(self, a: str, b: str) -> float:
+        """Calculate similarity ratio between two strings."""
+        return SequenceMatcher(None, a, b).ratio()
+        
+    def is_match(self, user_answer: str, correct_answer: str, threshold: float = 0.85) -> bool:
+        """Check if user's answer matches the correct answer."""
+        user_answer = self.normalize_text(user_answer)
+        correct_answer = self.normalize_text(correct_answer)
+        
+        # Direct match
+        if user_answer == correct_answer:
+            return True
+            
+        # Check common variations
+        user_main = self.reverse_variations.get(user_answer)
+        correct_main = self.reverse_variations.get(correct_answer)
+        
+        if user_main and correct_main and user_main == correct_main:
+            return True
+            
+        if user_main:
+            user_answer = user_main
+        if correct_main:
+            correct_answer = correct_main
+            
+        # Check variations
+        if correct_answer in self.variations:
+            if user_answer in self.variations[correct_answer]:
+                return True
+                
+        # Handle plural/singular
+        if user_answer.endswith('s') and user_answer[:-1] == correct_answer:
+            return True
+        if correct_answer.endswith('s') and correct_answer[:-1] == user_answer:
+            return True
+            
+        # Fuzzy matching for typos
+        similarity = self.get_similarity_ratio(user_answer, correct_answer)
+        if similarity >= threshold:
+            return True
+            
+        return False
+
+# Global matcher instance
+_matcher = AnswerMatcher()
+
+def is_answer_match(user_answer: str, correct_answer: str) -> bool:
+    """Global function to check answer matches."""
+    return _matcher.is_match(user_answer, correct_answer)
 
 def extract_command(message: str) -> Tuple[str, str]:
     """Extract command and arguments from a message."""
-    parts = message.strip().split(' ', 1)
-    command = parts[0].lower()
-    args = parts[1] if len(parts) > 1 else ''
+    parts = message.strip().split(maxsplit=1)
+    command = parts[0].lower() if parts else ""
+    args = parts[1] if len(parts) > 1 else ""
     return command, args

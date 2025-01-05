@@ -1,47 +1,39 @@
-"""Data model for quiz state management."""
-from dataclasses import dataclass, field
+"""Quiz state model."""
 from datetime import datetime
-from typing import Dict, Optional, Set, List
+from typing import Optional, Set
 import threading
-from collections import defaultdict
 
-@dataclass
 class QuizState:
-    """Represents the current state of a quiz game."""
-    active: bool = False
-    current_question: Optional[str] = None
-    current_answer: Optional[str] = None
-    question_time: Optional[datetime] = None
-    scores: Dict[str, int] = field(default_factory=lambda: defaultdict(int))
-    question_number: int = 0
-    total_questions: int = 10
-    answer_timeout: int = 30
-    channel: Optional[str] = None
-    timer: Optional[threading.Timer] = None
-    used_questions: Set[str] = field(default_factory=set)
-    question_verifications: Dict[str, str] = field(default_factory=dict)
-    streak_counts: Dict[str, int] = field(default_factory=lambda: defaultdict(int))
-
-    def reset(self) -> None:
-        """Reset the quiz state to default values."""
-        self.active = False
+    """Tracks the current state of a quiz game."""
+    
+    def __init__(self, active=False, channel=None, total_questions=10, answer_timeout=30):
+        self.active = active
+        self.channel = channel
+        self.total_questions = total_questions
+        self.answer_timeout = answer_timeout
+        
+        self.question_number = 0
         self.current_question = None
         self.current_answer = None
         self.question_time = None
-        self.scores.clear()
-        self.question_number = 0
-        self.channel = None
-        if self.timer:
-            self.timer.cancel()
-            self.timer = None
-        self.used_questions.clear()
-        self.question_verifications.clear()
-        self.streak_counts.clear()
-
-    def is_answer_valid(self, answer: str, elapsed_time: int) -> bool:
-        """Check if an answer is valid given the current state."""
+        self.timer: Optional[threading.Timer] = None
+        self.used_questions: Set[str] = set()
+        self.question_verifications = {}
+        
+        # New fields for improved tracking
+        self.last_correct_answer = None  # Tuple of (username, answer, question)
+        self.current_round_answers = set()  # Track all answers per question
+        
+    def is_answer_valid(self, answer: str, elapsed_seconds: int) -> bool:
+        """Check if an answer attempt is valid in the current state."""
         return (
-            self.active and
-            self.current_answer and
-            elapsed_time <= self.answer_timeout
+            self.active and 
+            self.current_answer and 
+            elapsed_seconds < self.answer_timeout and
+            len(answer.strip()) > 0
         )
+        
+    def reset_question_state(self):
+        """Reset per-question state tracking."""
+        self.last_correct_answer = None
+        self.current_round_answers = set()

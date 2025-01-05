@@ -7,6 +7,7 @@ from collections import defaultdict
 
 from ..models.quiz_state import QuizState
 from ..models.database import Database
+from ..models.question import QuestionManager, Question
 from ..services.mistral_service import MistralService
 from ..services.irc_service import IRCService, IRCMessage
 from ..utils.text_processing import is_answer_match, extract_command
@@ -28,6 +29,7 @@ class QuizGame:
         self.mistral = MistralService()
         self.score_tracker = ScoreTracker()
         self.irc = IRCService(message_handler=self.handle_message)
+        self.question_manager = QuestionManager()
         self.command_handlers = self._init_command_handlers()
 
     def _init_command_handlers(self) -> Dict[str, Callable[[str, str], None]]:
@@ -80,6 +82,9 @@ class QuizGame:
         if self.state.timer:
             self.state.timer.cancel()
             
+        # Reset question-specific state
+        self.state.reset_question_state()
+        
         self.state.question_number += 1
         if self.state.question_number > self.state.total_questions:
             self.end_game()
@@ -92,19 +97,32 @@ class QuizGame:
             self.end_game()
             return
             
-        question, answer, fun_fact = question_data
+        # Convert to Question object and validate
+        question = Question(
+            text=question_data[0],
+            primary_answer=question_data[1],
+            alternative_answers=set(),  # Will be populated by Mistral service
+            fun_fact=question_data[2],
+            category="general",
+            difficulty=3
+        )
         
+        if not self.question_manager.prepare_question({"text": question.text, "answer": question.primary_answer, "fun_fact": question.fun_fact}):
+            logger.error("Question failed validation")
+            self.end_game()
+            return
+            
         # Update state
-        self.state.current_question = question
-        self.state.current_answer = answer
-        self.state.question_verifications[question] = fun_fact
-        self.state.used_questions.add(f"{question}:{answer}")
+        self.state.current_question = question.text
+        self.state.current_answer = question.primary_answer
+        self.state.question_verifications[question.text] = question.fun_fact
+        self.state.used_questions.add(f"{question.text}:{question.primary_answer}")
         self.state.question_time = datetime.now()
         
         # Send question
         self.irc.send_channel_message(
             self.state.channel,
-            question,
+            question.text,
             question=True,
             number=self.state.question_number
         )
@@ -123,8 +141,20 @@ class QuizGame:
             (datetime.now() - self.state.question_time).seconds
         ):
             return
+
+        # Prevent duplicate answers from same user for current question
+        answer_key = f"{username}:{answer}"
+        if answer_key in self.state.current_round_answers:
+            return
+        self.state.current_round_answers.add(answer_key)
             
         if is_answer_match(answer, self.state.current_answer):
+            # Prevent duplicate scoring
+            current_answer_key = (username, answer, self.state.current_question)
+            if self.state.last_correct_answer == current_answer_key:
+                return
+            self.state.last_correct_answer = current_answer_key
+
             # Calculate score
             elapsed_time = (datetime.now() - self.state.question_time).seconds
             base_points = calculate_base_points(
@@ -132,6 +162,9 @@ class QuizGame:
                 self.state.answer_timeout,
                 self.state.question_number
             )
+            
+            # Update streak before calculating multipliers
+            self.score_tracker.update_streak(username)
             
             streak_multiplier = calculate_streak_multiplier(
                 self.score_tracker.streaks.get(username, 0),
@@ -160,13 +193,16 @@ class QuizGame:
                 self.score_tracker.streaks[username]
             )
             
-            # Send success message
+            # Send success message with streak info
+            streak = self.score_tracker.streaks.get(username, 0)
+            streak_info = f" (Streak: {streak}x)" if streak > 1 else ""
             score_message = format_score_message(
                 username,
                 points,
                 base_points,
                 total_multiplier
-            )
+            ) + streak_info
+            
             self.irc.send_channel_message(self.state.channel, score_message)
             
             # Send verification fact if available
@@ -178,7 +214,7 @@ class QuizGame:
                     f"💡 {fun_fact}"
                 )
             
-            # Move to next question
+            # Move to next question after a short delay
             threading.Timer(2.0, self.next_question).start()
         else:
             self.score_tracker.reset_streak(username)
@@ -243,9 +279,10 @@ class QuizGame:
                     "🏆 All-Time Leaders:",
                     announcement=True
                 )
-                for entry in leaderboard:
+                for i, entry in enumerate(leaderboard, 1):
+                    medal = {1: "🥇", 2: "🥈", 3: "🥉"}.get(i, "•")
                     leader_msg = (
-                        f"{entry['username']}: {entry['total_score']} "
+                        f"{medal} {entry['username']}: {entry['total_score']} "
                         f"({entry['correct_answers']} correct)"
                     )
                     self.irc.send_channel_message(self.state.channel, leader_msg)

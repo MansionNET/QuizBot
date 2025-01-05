@@ -54,8 +54,8 @@ class MistralService:
         - Simple, clear language
         - Under 15 words
         - No complex terminology
-        - Focused on popular culture, technology, sports, and entertainment
-        - Suitable for casual players
+        - Focused on popular culture, technology, sports, history, science, movies and entertainment
+        - Suitable for casual players and some expert
         
         EXAMPLES OF GOOD QUESTIONS:
         "What game features characters building with blocks?" -> "minecraft"

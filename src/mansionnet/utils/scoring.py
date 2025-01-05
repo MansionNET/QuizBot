@@ -2,6 +2,15 @@
 from typing import Dict, Tuple
 from datetime import datetime
 
+__all__ = [
+    'calculate_base_points',
+    'calculate_streak_multiplier',
+    'calculate_speed_multiplier',
+    'calculate_final_score',
+    'format_score_message',
+    'ScoreTracker'
+]
+
 def calculate_base_points(elapsed_time: float, max_time: float, 
                         question_number: int) -> int:
     """Calculate base points for an answer based on time and question difficulty."""
@@ -58,38 +67,54 @@ class ScoreTracker:
         """Initialize score tracking."""
         self.scores: Dict[str, int] = {}
         self.streaks: Dict[str, int] = {}
+        self.highest_streaks: Dict[str, int] = {}
         self.fastest_answers: Dict[str, float] = {}
         self.correct_answers: Dict[str, int] = {}
         self.total_questions_answered: int = 0
         
     def update_score(self, username: str, points: int, answer_time: float) -> None:
         """Update a player's score and statistics."""
-        # Update basic score
         self.scores[username] = self.scores.get(username, 0) + points
+        self.correct_answers[username] = self.correct_answers.get(username, 0) + 1
         
-        # Update streak
-        self.streaks[username] = self.streaks.get(username, 0) + 1
-        
-        # Update fastest answer
         current_fastest = self.fastest_answers.get(username, float('inf'))
         if answer_time < current_fastest:
             self.fastest_answers[username] = answer_time
         
-        # Update correct answers count
-        self.correct_answers[username] = self.correct_answers.get(username, 0) + 1
-        
-        # Update total questions
         self.total_questions_answered += 1
+
+    def update_streak(self, username: str) -> None:
+        """Update a player's streak after a correct answer."""
+        # Initialize streak if not exists
+        if username not in self.streaks:
+            self.streaks[username] = 0
+            self.highest_streaks[username] = 0
+            
+        # Increment streak
+        self.streaks[username] += 1
+        
+        # Update highest streak if current is higher
+        if self.streaks[username] > self.highest_streaks[username]:
+            self.highest_streaks[username] = self.streaks[username]
     
     def reset_streak(self, username: str) -> None:
         """Reset a player's answer streak."""
-        self.streaks[username] = 0
+        if username in self.streaks:  # Only reset if exists
+            self.streaks[username] = 0
+    
+    def get_current_streak(self, username: str) -> int:
+        """Get a player's current streak."""
+        return self.streaks.get(username, 0)
+    
+    def get_highest_streak(self, username: str) -> int:
+        """Get a player's highest streak."""
+        return self.highest_streaks.get(username, 0)
     
     def get_player_stats(self, username: str) -> Dict:
         """Get comprehensive statistics for a player."""
         return {
             'score': self.scores.get(username, 0),
-            'streak': self.streaks.get(username, 0),
+            'streak': self.get_highest_streak(username),  # Use highest streak for stats
             'fastest_answer': self.fastest_answers.get(username, 0),
             'correct_answers': self.correct_answers.get(username, 0),
             'accuracy': (
