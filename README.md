@@ -92,7 +92,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## Credits 👥
 
-Created by Avatar for MansionNET IRC Network
+Created by Ivan Todorov for MansionNET IRC Network
 
 ## Support 💬
 
