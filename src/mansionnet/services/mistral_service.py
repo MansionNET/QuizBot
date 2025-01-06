@@ -4,7 +4,7 @@ import time
 import random
 import logging
 import requests
-from typing import Dict, Tuple, Optional, Set
+from typing import Dict, Tuple, Optional, Set, List
 from dotenv import load_dotenv
 
 from ..config.settings import (
@@ -30,30 +30,48 @@ class MistralService:
         self.api_key = api_key
         self.base_url = "https://api.mistral.ai/v1"
         self.model = "mistral-medium"
-        self.used_categories = set()
+        self.used_categories: List[str] = []
         self.last_api_call = 0
         self.min_delay = 2
         self.timeout = 20
         self.max_retries = 2
         self.fallback_attempt = 0
         self.max_fallback_attempts = 3
+        self.validation_failures = 0
+        self.max_validation_failures = 5
+        self.last_category = None
+        self.last_subcategory = None
 
     def _select_category(self) -> Tuple[str, str]:
+        # Clear used categories if we've used them all
         if len(self.used_categories) >= len(QUIZ_CATEGORIES):
             self.used_categories.clear()
 
         available_categories = [
             cat for cat in QUIZ_CATEGORIES.keys()
-            if cat not in self.used_categories
+            if cat not in self.used_categories and cat != self.last_category
         ]
         
         if not available_categories:
             available_categories = list(QUIZ_CATEGORIES.keys())
 
         category = random.choice(available_categories)
-        subcategory = random.choice(QUIZ_CATEGORIES[category])
         
-        self.used_categories.add(category)
+        # Avoid same subcategory if possible
+        potential_subcategories = [
+            sub for sub in QUIZ_CATEGORIES[category]
+            if sub != self.last_subcategory
+        ]
+        
+        if not potential_subcategories:
+            potential_subcategories = QUIZ_CATEGORIES[category]
+            
+        subcategory = random.choice(potential_subcategories)
+        
+        self.used_categories.append(category)
+        self.last_category = category
+        self.last_subcategory = subcategory
+        
         return category, subcategory
 
     def _generate_prompt(self, category: str, subcategory: str, difficulty: str) -> str:
@@ -76,7 +94,7 @@ class MistralService:
         - Clear and concise (under 15 words)
         - Direct question format
         - No complex jargon or technical terms
-        - Avoid ambiguous words ({', '.join(list(AMBIGUOUS_TERMS)[:5])})
+        - Avoid ambiguous terms
         - Consider multiple valid answers
         - Focus on fundamental knowledge
 
@@ -85,18 +103,12 @@ class MistralService:
         - Medium: Requires specific knowledge but widely known
         - Hard: Detailed knowledge but still fair
 
-        Example by category:
-        - Science: "Which element makes up most of Earth's atmosphere?" -> "nitrogen"
-        - History: "Which empire built the pyramids at Giza?" -> "egyptian"
-        - Geography: "Which mountain range separates Europe from Asia?" -> "ural"
-        - Arts: "Who painted the Mona Lisa?" -> "da vinci"
+        Example format:
+        Question: Which element makes up most of Earth's atmosphere?
+        Answer: nitrogen
+        Alternative Answers: n2
+        Fun Fact: Nitrogen makes up about 78% of Earth's atmosphere.
         
-        BAD EXAMPLES:
-        - "Who was the first person to..." (avoid superlatives)
-        - "Which recent movie..." (avoid time-sensitive)
-        - "What is the most popular..." (avoid subjective)
-        - "Who is currently..." (avoid current events)
-
         Format response EXACTLY as:
         Question: [your question]
         Answer: [simple answer]
@@ -107,7 +119,7 @@ class MistralService:
         current_time = time.time()
         time_since_last_call = current_time - self.last_api_call
         if time_since_last_call < self.min_delay:
-            time.sleep(self.min_delay - time_since_last_call)
+            time.sleep(self.min_delay - time_since_last_call + random.uniform(0, 1))
 
         retries = 0
         while retries <= self.max_retries:
@@ -152,115 +164,142 @@ class MistralService:
 
     def _parse_response(self, content: str) -> Tuple[Optional[str], Optional[str], Set[str], Optional[str]]:
         try:
-            parts = content.split('Question: ')[1].split('Answer:')
-            question = clean_question_text(parts[0].strip())
+            # Split by markers
+            parts = content.split('\n')
+            question = None
+            primary_answer = None
+            alternative_answers = set()
+            fun_fact = None
             
-            remaining = parts[1].split('Alternative Answers:')
-            primary_answer = normalize_answer(remaining[0].strip())
-            
-            alt_and_fact = remaining[1].split('Fun Fact:')
-            alternative_answers = {
-                normalize_answer(ans.strip())
-                for ans in alt_and_fact[0].strip().split(',')
-                if ans.strip()
-            }
-            
-            fun_fact = alt_and_fact[1].strip()
+            for part in parts:
+                part = part.strip()
+                if part.startswith('Question:'):
+                    question = clean_question_text(part.split('Question:')[1].strip())
+                elif part.startswith('Answer:'):
+                    primary_answer = normalize_answer(part.split('Answer:')[1].strip())
+                elif part.startswith('Alternative Answers:'):
+                    alts = part.split('Alternative Answers:')[1].strip()
+                    if alts and alts.lower() != "none":
+                        alternative_answers = {
+                            normalize_answer(ans.strip())
+                            for ans in alts.split(',')
+                            if ans.strip()
+                        }
+                elif part.startswith('Fun Fact:'):
+                    fun_fact = part.split('Fun Fact:')[1].strip()
             
             return question, primary_answer, alternative_answers, fun_fact
             
-        except (IndexError, AttributeError) as e:
+        except Exception as e:
             logger.error(f"Failed to parse API response: {e}")
             return None, None, set(), None
 
     def _is_valid_question(self, question: str, answer: str, alt_answers: Set[str]) -> bool:
+        if not question or not answer:
+            return False
+            
+        question_lower = question.lower()
+        answer_lower = answer.lower()
+
+        # Basic validation first
         is_valid, reason = validate_question_content(question, answer)
         if not is_valid:
             logger.debug(f"Question rejected: {reason}")
             return False
 
-        if any(term in question.lower() for term in COMPLEX_TERMS):
+        # Check for problematic terms
+        if any(term in question_lower for term in COMPLEX_TERMS):
             logger.debug("Question rejected: Contains complex terms")
             return False
 
-        if any(term in question.lower() for term in AMBIGUOUS_TERMS):
+        if any(term in question_lower for term in AMBIGUOUS_TERMS):
             logger.debug("Question rejected: Contains ambiguous terms")
             return False
 
+        # Check answer format
         if len(answer.split()) > 3:
             logger.debug("Answer rejected: Too long")
             return False
 
-        if answer in ALTERNATIVE_ANSWERS:
-            alt_answers.update(ALTERNATIVE_ANSWERS[answer])
+        # Add alternative answers if applicable
+        if answer_lower in ALTERNATIVE_ANSWERS:
+            alt_answers.update(ALTERNATIVE_ANSWERS[answer_lower])
 
+        # Make sure question ends with question mark
+        if not question.strip().endswith('?'):
+            logger.debug("Question rejected: No question mark")
+            return False
+
+        # Additional validation
+        if len(question.split()) > 15:
+            logger.debug("Question rejected: Too long")
+            return False
+
+        if len(question) < 10:
+            logger.debug("Question rejected: Too short")
+            return False
+            
+        # Reset validation failures counter on success
+        self.validation_failures = 0
         return True
 
     def get_trivia_question(self, excluded_questions: set) -> Optional[Tuple[str, str, str]]:
-        attempts = 0
-        max_attempts = 3
-        
-        while attempts < max_attempts:
-            try:
-                category, subcategory = self._select_category()
-                
-                difficulty = random.choices(
-                    ['easy', 'medium', 'hard'],
-                    weights=[0.6, 0.3, 0.1]
-                )[0]
-                
-                prompt = self._generate_prompt(category, subcategory, difficulty)
-                
-                response = self._make_api_request([{
-                    "role": "user",
-                    "content": prompt
-                }])
-                
-                if not response:
-                    logger.warning(f"Failed to get response from API (attempt {attempts + 1}/{max_attempts})")
-                    attempts += 1
-                    continue
-                
-                question, answer, alt_answers, fun_fact = self._parse_response(
-                    response['choices'][0]['message']['content']
-                )
-                
-                if not all([question, answer, fun_fact]):
-                    attempts += 1
-                    continue
-                
-                if not self._is_valid_question(question, answer, alt_answers):
-                    attempts += 1
-                    continue
-                
-                question_hash = f"{question}:{answer}"
-                if question_hash in excluded_questions:
-                    attempts += 1
-                    continue
+        if self.validation_failures >= self.max_validation_failures:
+            logger.warning("Maximum validation failures reached, using fallback")
+            return self._get_fallback_question()
 
-                return question, answer, fun_fact
-                
-            except Exception as e:
-                logger.error(f"Error generating question: {e}")
-                attempts += 1
-        
-        # Try to get a fallback question, with its own retry counter
-        self.fallback_attempt += 1
-        if self.fallback_attempt >= self.max_fallback_attempts:
-            logger.error("Maximum fallback attempts reached")
-            return None
+        try:
+            difficulty_weights = {
+                'easy': 0.6,
+                'medium': 0.3,
+                'hard': 0.1
+            }
             
-        logger.info(f"Using fallback question (attempt {self.fallback_attempt})")
-        fallback = self._get_fallback_question()
-        
-        # Verify fallback question isn't in excluded set
-        question_hash = f"{fallback[0]}:{fallback[1]}"
-        if question_hash in excluded_questions:
+            difficulty = random.choices(
+                list(difficulty_weights.keys()),
+                weights=list(difficulty_weights.values())
+            )[0]
+            
+            # Generate and validate question
+            category, subcategory = self._select_category()
+            prompt = self._generate_prompt(category, subcategory, difficulty)
+            
+            response = self._make_api_request([{
+                "role": "user",
+                "content": prompt
+            }])
+            
+            if not response or 'choices' not in response:
+                self.validation_failures += 1
+                logger.warning("Failed to get valid response from API")
+                return self.get_trivia_question(excluded_questions)
+            
+            question, answer, alt_answers, fun_fact = self._parse_response(
+                response['choices'][0]['message']['content']
+            )
+            
+            if not all([question, answer, fun_fact]):
+                self.validation_failures += 1
+                logger.warning("Incomplete question data")
+                return self.get_trivia_question(excluded_questions)
+            
+            if not self._is_valid_question(question, answer, alt_answers):
+                self.validation_failures += 1
+                return self.get_trivia_question(excluded_questions)
+            
+            question_hash = f"{question}:{answer}"
+            if question_hash in excluded_questions:
+                logger.debug("Question was recently used")
+                return self.get_trivia_question(excluded_questions)
+
+            return question, answer, fun_fact
+                
+        except Exception as e:
+            logger.error(f"Error generating question: {e}")
+            self.validation_failures += 1
             return self.get_trivia_question(excluded_questions)
-            
-        return fallback
 
-    def _get_fallback_question(self) -> Tuple[str, str, str]:
+    def _get_fallback_question(self) -> Optional[Tuple[str, str, str]]:
         fallback_questions = [
             (
                 "Which element is the most abundant in Earth's atmosphere?",
@@ -286,57 +325,12 @@ class MistralService:
                 "Which instrument has 88 keys?",
                 "piano",
                 "The modern piano was invented by Bartolomeo Cristofori around 1700."
-            ),
-            (
-                "Which playwright wrote Romeo and Juliet?",
-                "shakespeare",
-                "Romeo and Juliet was written between 1591 and 1595."
-            ),
-            (
-                "What force pulls objects toward Earth?",
-                "gravity",
-                "Gravity was first described mathematically by Isaac Newton."
-            ),
-            (
-                "Which gas do plants absorb from the air?",
-                "carbon dioxide",
-                "Plants convert carbon dioxide into oxygen through photosynthesis."
-            ),
-            (
-                "Which planet is known as the Red Planet?",
-                "mars",
-                "Mars gets its red color from iron oxide (rust) on its surface."
-            ),
-            (
-                "What organ pumps blood through the body?",
-                "heart",
-                "The average heart beats over 100,000 times per day."
-            ),
-            (
-                "How many players are on a soccer team during a match?",
-                "eleven",
-                "The rules establishing 11 players were set in 1897."
-            ),
-            (
-                "Which scientist is known for discovering electricity?",
-                "franklin",
-                "Benjamin Franklin conducted his famous kite experiment in 1752."
-            ),
-            (
-                "What is the name for a three-sided shape?",
-                "triangle",
-                "A triangle's three angles always add up to 180 degrees."
-            ),
-            (
-                "Which galaxy contains our solar system?",
-                "milky way",
-                "The Milky Way contains over 100 billion stars."
-            ),
-            (
-                "Which big cat has black stripes?",
-                "tiger",
-                "Each tiger's stripe pattern is unique, like human fingerprints."
             )
         ]
         
-        return random.choice(fallback_questions)
+        # Reset validation failures counter
+        self.validation_failures = 0
+        self.fallback_attempt = 0
+        
+        question = random.choice(fallback_questions)
+        return question

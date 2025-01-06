@@ -17,6 +17,7 @@ class IRCMessage:
     channel: str
     content: str
     raw: str
+    timestamp: float = time.time()
 
 class IRCService:
     """Handles IRC connection and messaging."""
@@ -26,12 +27,14 @@ class IRCService:
         self.server = IRC_CONFIG["server"]
         self.port = IRC_CONFIG["port"]
         self.nickname = IRC_CONFIG["nickname"]
-        self.channels = IRC_CONFIG["channels"]
+        self.channels = ["#opers"]  # Hardcoded for now
         self.message_handler = message_handler
         self.irc = None
         self.connected = False
+        self.last_pong = time.time()
+        self.ping_timeout = 300  # 5 minutes
         
-        # Set up SSL context - exactly as in original
+        # Set up SSL context
         self.ssl_context = ssl.create_default_context()
         self.ssl_context.check_hostname = False
         self.ssl_context.verify_mode = ssl.CERT_NONE
@@ -39,34 +42,49 @@ class IRCService:
     def connect(self) -> bool:
         """Establish connection to the IRC server."""
         try:
+            # Create and wrap socket
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(30)
             self.irc = self.ssl_context.wrap_socket(sock)
             
+            # Connect
             logger.info(f"Connecting to {self.server}:{self.port}...")
             self.irc.connect((self.server, self.port))
             
+            # Send initial commands
             self.send(f"NICK {self.nickname}")
             self.send(f"USER {self.nickname} 0 * :MansionNet Quiz Bot")
             
+            # Wait for welcome message
             buffer = ""
             while True:
-                data = self.irc.recv(2048).decode("UTF-8")
-                buffer += data
-                
-                if "PING" in buffer:
-                    ping_token = buffer[buffer.find("PING"):].split()[1]
-                    self.send(f"PONG {ping_token}")
-                
-                if "001" in buffer:  # RPL_WELCOME
-                    self.connected = True
-                    logger.info("Successfully connected to IRC server!")
-                    for channel in self.channels:
-                        self.send(f"JOIN {channel}")
-                        logger.info(f"Joined channel: {channel}")
-                        time.sleep(1)
-                    return True
-                
-                if "Closing Link" in buffer or "ERROR" in buffer:
+                try:
+                    data = self.irc.recv(2048).decode("UTF-8")
+                    if not data:
+                        return False
+                        
+                    buffer += data
+                    
+                    if "PING" in buffer:
+                        ping_token = buffer[buffer.find("PING"):].split()[1]
+                        self.send(f"PONG {ping_token}")
+                        self.last_pong = time.time()
+                    
+                    if "001" in buffer:  # RPL_WELCOME
+                        self.connected = True
+                        logger.info("Successfully connected to IRC server!")
+                        for channel in self.channels:
+                            self.send(f"JOIN {channel}")
+                            logger.info(f"Joined channel: {channel}")
+                            time.sleep(1)
+                        return True
+                    
+                    if "ERROR" in buffer or "Closing Link" in buffer:
+                        logger.error(f"Server returned error: {buffer}")
+                        return False
+                        
+                except socket.timeout:
+                    logger.error("Connection timed out waiting for welcome message")
                     return False
                     
         except Exception as e:
@@ -83,12 +101,16 @@ class IRCService:
             return False
         except Exception as e:
             logger.error(f"Error sending message: {e}")
+            self.connected = False
             return False
 
     def send_channel_message(self, channel: str, message: str, **kwargs) -> bool:
         """Send a formatted message to a channel."""
         formatted_message = self.format_message(message, **kwargs)
-        return self.send(f"PRIVMSG {channel} :{formatted_message}")
+        success = self.send(f"PRIVMSG {channel} :{formatted_message}")
+        if success:
+            logger.debug(f"Sent to {channel}: {formatted_message}")
+        return success
 
     def format_message(self, message: str, **kwargs) -> str:
         """Format a message with IRC color codes and styles."""
@@ -127,11 +149,15 @@ class IRCService:
             content = parts[1].strip()
             username = line[1:].split("!")[0]
             
+            # Log parsed message for debugging
+            logger.debug(f"Parsed message - User: {username}, Channel: {channel}, Content: {content}")
+            
             return IRCMessage(
                 username=username,
                 channel=channel,
                 content=content,
-                raw=line
+                raw=line,
+                timestamp=time.time()
             )
         except Exception as e:
             logger.error(f"Error parsing message: {e}")
@@ -147,10 +173,13 @@ class IRCService:
                     continue
                 
                 buffer = ""
+                self.irc.settimeout(60)  # 1 minute timeout for receiving messages
+                
                 while self.connected:
                     try:
                         data = self.irc.recv(2048).decode("UTF-8")
                         if not data:
+                            logger.error("Server closed connection")
                             self.connected = False
                             break
                             
@@ -163,12 +192,27 @@ class IRCService:
                             
                             if line.startswith("PING"):
                                 self.send(f"PONG {line.split()[1]}")
+                                self.last_pong = time.time()
                                 continue
                                 
                             message = self.parse_message(line)
                             if message and self.message_handler:
-                                self.message_handler(message)
+                                try:
+                                    self.message_handler(message)
+                                except Exception as e:
+                                    logger.error(f"Error in message handler: {e}")
+                                    continue
+                                    
+                        # Check for ping timeout
+                        if time.time() - self.last_pong > self.ping_timeout:
+                            logger.error("Ping timeout")
+                            self.connected = False
+                            break
                                 
+                    except socket.timeout:
+                        # Send a PING to keep connection alive
+                        self.send(f"PING :{self.server}")
+                        continue
                     except Exception as e:
                         logger.error(f"Error in message loop: {e}")
                         self.connected = False

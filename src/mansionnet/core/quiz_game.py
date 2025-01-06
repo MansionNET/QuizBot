@@ -32,9 +32,6 @@ class QuizGame:
         self.irc = IRCService(message_handler=self.handle_message)
         self.question_manager = QuestionManager()
         self.command_handlers = self._init_command_handlers()
-        self.max_question_attempts = 3
-        self.max_main_attempts = 3
-        self.question_check_delay = 2  # seconds to wait between question attempts
 
     def _init_command_handlers(self) -> Dict[str, Callable[[str, str], None]]:
         """Initialize command handlers mapping."""
@@ -48,6 +45,7 @@ class QuizGame:
         
     def start_game(self, channel: str) -> bool:
         """Start a new quiz game."""
+        logger.info(f"Attempting to start new game in {channel}")
         if self.state.active:
             return False
             
@@ -73,60 +71,39 @@ class QuizGame:
         for msg in welcome_messages:
             self.irc.send_channel_message(channel, msg, announcement=True)
             
-        # Start first question
+        # Start first question after a short delay
         threading.Timer(2.0, self.next_question).start()
         return True
 
-    def try_get_valid_question(self, attempt: int = 1) -> Optional[Question]:
-        """Try to get a valid question, with multiple attempts."""
-        if attempt > self.max_question_attempts:
-            return None
+    def handle_message(self, message: IRCMessage) -> None:
+        """Handle incoming IRC messages."""
+        logger.debug(f"Handling message: {message.content}")
+        
+        if not message.content:
+            return
 
-        try:
-            question_data = self.mistral.get_trivia_question(self.state.used_questions)
-            if not question_data:
-                logger.warning(f"Failed to get question data, attempt {attempt} of {self.max_question_attempts}")
-                time.sleep(self.question_check_delay)  # Add delay between attempts
-                return self.try_get_valid_question(attempt + 1)
+        command, args = extract_command(message.content)
+        logger.debug(f"Extracted command: {command}, args: {args}")
+        
+        # Handle commands
+        if command in self.command_handlers:
+            logger.info(f"Executing command handler for {command}")
+            self.command_handlers[command](message.username, message.channel)
+            return
+            
+        # Handle answer attempts during active quiz
+        if (self.state.active and self.state.channel == message.channel
+            and not message.content.startswith('!')):
+            self.handle_answer(message.username, message.content)
 
-            # Ensure we got all required question data
-            if len(question_data) != 3:
-                logger.warning(f"Invalid question data format, attempt {attempt}")
-                time.sleep(self.question_check_delay)
-                return self.try_get_valid_question(attempt + 1)
-
-            question = Question(
-                text=question_data[0],
-                primary_answer=question_data[1],
-                alternative_answers=set(),
-                fun_fact=question_data[2],
-                category="general",
-                difficulty=3
+    def _handle_quiz_command(self, username: str, channel: str) -> None:
+        """Handle the !quiz command."""
+        logger.info(f"Quiz command from {username} in {channel}")
+        if not self.start_game(channel):
+            self.irc.send_channel_message(
+                channel,
+                "❌ A quiz is already in progress!"
             )
-
-            # Skip if question was recently used
-            question_hash = f"{question.text}:{question.primary_answer}"
-            if question_hash in self.state.used_questions:
-                logger.warning(f"Question was recently used, attempt {attempt}")
-                time.sleep(self.question_check_delay)
-                return self.try_get_valid_question(attempt + 1)
-
-            # Validate question
-            if not self.question_manager.prepare_question({
-                "text": question.text,
-                "answer": question.primary_answer,
-                "fun_fact": question.fun_fact
-            }):
-                logger.warning(f"Question validation failed, attempt {attempt}")
-                time.sleep(self.question_check_delay)
-                return self.try_get_valid_question(attempt + 1)
-
-            return question
-
-        except Exception as e:
-            logger.error(f"Error getting question: {e}")
-            time.sleep(self.question_check_delay)
-            return self.try_get_valid_question(attempt + 1)
 
     def next_question(self) -> None:
         """Progress to the next question."""
@@ -145,69 +122,52 @@ class QuizGame:
             self.end_game()
             return
 
-        # Try to get a valid question with multiple attempts
-        for main_attempt in range(self.max_main_attempts):
-            try:
-                question = self.try_get_valid_question()
-                if question:
-                    # Update state
-                    self.state.current_question = question.text
-                    self.state.current_answer = question.primary_answer
-                    self.state.question_verifications[question.text] = question.fun_fact
-                    self.state.used_questions.add(f"{question.text}:{question.primary_answer}")
-                    self.state.question_time = datetime.now()
-                    
-                    # Send question
-                    self.irc.send_channel_message(
-                        self.state.channel,
-                        question.text,
-                        question=True,
-                        number=self.state.question_number
-                    )
-                    
-                    # Start timer for next question
-                    self.state.timer = threading.Timer(
-                        self.state.answer_timeout,
-                        self.handle_timeout
-                    )
-                    self.state.timer.start()
-                    return
+        # Get next question
+        try:
+            question = self.mistral.get_trivia_question(self.state.used_questions)
+            if not question:
+                logger.error("Failed to get valid question")
+                self.end_game()
+                return
 
-            except Exception as e:
-                logger.error(f"Error in next_question: {e}, attempt {main_attempt + 1}/{self.max_main_attempts}")
-                if main_attempt == self.max_main_attempts - 1:  # Last attempt
-                    logger.error("All question generation attempts failed")
-                    self.end_game()
-                    return
-                continue
+            # Update state
+            self.state.current_question = question[0]
+            self.state.current_answer = question[1]
+            self.state.fun_fact = question[2]
+            self.state.question_time = datetime.now()
+            
+            # Send question
+            self.irc.send_channel_message(
+                self.state.channel,
+                self.state.current_question,
+                question=True,
+                number=self.state.question_number
+            )
+            
+            # Start timer for next question
+            self.state.timer = threading.Timer(
+                self.state.answer_timeout,
+                self.handle_timeout
+            )
+            self.state.timer.start()
+            
+        except Exception as e:
+            logger.error(f"Error in next_question: {e}")
+            self.end_game()
 
-        # If we got here, all attempts failed
-        logger.error("Failed to get valid question after all attempts")
-        self.end_game()
-        
     def handle_answer(self, username: str, answer: str) -> None:
         """Process a user's answer attempt."""
-        if not self.state.is_answer_valid(
-            answer,
-            (datetime.now() - self.state.question_time).seconds
-        ):
+        if not self.state.active or not self.state.current_question:
             return
-
-        # Prevent duplicate answers from same user for current question
-        answer_key = f"{username}:{answer}"
-        if answer_key in self.state.current_round_answers:
-            return
-        self.state.current_round_answers.add(answer_key)
             
-        if is_answer_match(answer, self.state.current_answer):
-            # Prevent duplicate scoring
-            current_answer_key = (username, answer, self.state.current_question)
-            if self.state.last_correct_answer == current_answer_key:
-                return
-            self.state.last_correct_answer = current_answer_key
+        # Calculate elapsed time
+        elapsed_time = (datetime.now() - self.state.question_time).total_seconds()
+        if elapsed_time >= self.state.answer_timeout:
+            return
 
+        # Check answer
+        if is_answer_match(answer, self.state.current_answer):
             # Calculate score
-            elapsed_time = (datetime.now() - self.state.question_time).seconds
             base_points = calculate_base_points(
                 elapsed_time,
                 self.state.answer_timeout,
@@ -247,6 +207,7 @@ class QuizGame:
             # Send success message with streak info
             streak = self.score_tracker.streaks.get(username, 0)
             streak_info = f" (Streak: {streak}x)" if streak > 1 else ""
+            
             score_message = format_score_message(
                 username,
                 points,
@@ -256,13 +217,11 @@ class QuizGame:
             
             self.irc.send_channel_message(self.state.channel, score_message)
             
-            # Send verification fact if available
-            if fun_fact := self.state.question_verifications.get(
-                self.state.current_question
-            ):
+            # Send fun fact
+            if self.state.fun_fact:
                 self.irc.send_channel_message(
                     self.state.channel,
-                    f"💡 {fun_fact}"
+                    f"💡 {self.state.fun_fact}"
                 )
             
             # Move to next question after a short delay
@@ -276,16 +235,14 @@ class QuizGame:
             return
             
         timeout_msg = (
-            f"⏰ Time's up! The answer was: {self.state.current_answer}"
+            f"⏰ ⏰ Time's up! The answer was: {self.state.current_answer}"
         )
         self.irc.send_channel_message(self.state.channel, timeout_msg, timeout=True)
         
-        if fun_fact := self.state.question_verifications.get(
-            self.state.current_question
-        ):
+        if self.state.fun_fact:
             self.irc.send_channel_message(
                 self.state.channel,
-                f"💡 {fun_fact}"
+                f"💡 {self.state.fun_fact}"
             )
         
         # Reset all streaks on timeout
@@ -330,7 +287,7 @@ class QuizGame:
                     "🏆 All-Time Leaders:",
                     announcement=True
                 )
-                for i, entry in enumerate(leaderboard, 1):
+                for i, entry in enumerate(leaderboard[:5], 1):
                     medal = {1: "🥇", 2: "🥈", 3: "🥉"}.get(i, "•")
                     leader_msg = (
                         f"{medal} {entry['username']}: {entry['total_score']} "
@@ -340,31 +297,6 @@ class QuizGame:
         
         self.state = QuizState()
         self.score_tracker = ScoreTracker()
-        
-    def handle_message(self, message: IRCMessage) -> None:
-        """Handle incoming IRC messages."""
-        if message.channel not in IRC_CONFIG['channels']:
-            return
-            
-        command, args = extract_command(message.content)
-        
-        # Handle commands
-        if handler := self.command_handlers.get(command):
-            handler(message.username, message.channel)
-            return
-            
-        # Handle answer attempts during active quiz
-        if (self.state.active and self.state.channel == message.channel and
-            not message.content.startswith('!')):
-            self.handle_answer(message.username, message.content)
-
-    def _handle_quiz_command(self, username: str, channel: str) -> None:
-        """Handle the !quiz command."""
-        if not self.start_game(channel):
-            self.irc.send_channel_message(
-                channel,
-                "❌ A quiz is already in progress!"
-            )
 
     def _handle_help_command(self, username: str, channel: str) -> None:
         """Handle the !help command."""
@@ -413,7 +345,7 @@ class QuizGame:
                 "🏆 Top Quiz Masters:",
                 announcement=True
             )
-            for i, entry in enumerate(leaderboard, 1):
+            for i, entry in enumerate(leaderboard[:5], 1):
                 medal = {1: "🥇", 2: "🥈", 3: "🥉"}.get(i, "•")
                 msg = (
                     f"{medal} {entry['username']}: {entry['total_score']} points "
