@@ -4,6 +4,8 @@ import sqlite3
 from pathlib import Path
 from typing import Generator, Optional, List, Dict, Any
 import logging
+import asyncio
+from functools import partial
 
 from ..config.settings import DB_CONFIG
 
@@ -65,91 +67,100 @@ class Database:
                     logger.error(f"Error creating table {table_name}: {e}")
             conn.commit()
 
-    def update_score(self, username: str, points: int, answer_time: float,
+    async def update_score(self, username: str, points: int, answer_time: float,
                     current_streak: int) -> None:
         """Update user score and statistics."""
-        with self.get_connection() as conn:
-            cursor = conn.cursor()
-            try:
-                cursor.execute("""
-                    INSERT INTO scores (
-                        username, total_score, games_played, correct_answers,
-                        fastest_answer, longest_streak, highest_score, last_played
-                    )
-                    VALUES (?, ?, 1, 1, ?, ?, ?, datetime('now'))
-                    ON CONFLICT(username) DO UPDATE SET
-                        total_score = total_score + ?,
-                        correct_answers = correct_answers + 1,
-                        fastest_answer = CASE
-                            WHEN fastest_answer = 0 OR ? < fastest_answer
-                            THEN ?
-                            ELSE fastest_answer
-                        END,
-                        longest_streak = CASE
-                            WHEN ? > longest_streak
-                            THEN ?
-                            ELSE longest_streak
-                        END,
-                        highest_score = CASE
-                            WHEN ? > highest_score
-                            THEN ?
-                            ELSE highest_score
-                        END,
-                        last_played = datetime('now')
-                """, (
-                    username, points, answer_time, current_streak, points,
-                    points, answer_time, answer_time, current_streak,
-                    current_streak, points, points
-                ))
-                conn.commit()
-            except sqlite3.Error as e:
-                logger.error(f"Error updating score for {username}: {e}")
-                conn.rollback()
+        def _update():
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                try:
+                    cursor.execute("""
+                        INSERT INTO scores (
+                            username, total_score, games_played, correct_answers,
+                            fastest_answer, longest_streak, highest_score, last_played
+                        )
+                        VALUES (?, ?, 1, 1, ?, ?, ?, datetime('now'))
+                        ON CONFLICT(username) DO UPDATE SET
+                            total_score = total_score + ?,
+                            correct_answers = correct_answers + 1,
+                            fastest_answer = CASE
+                                WHEN fastest_answer = 0 OR ? < fastest_answer
+                                THEN ?
+                                ELSE fastest_answer
+                            END,
+                            longest_streak = CASE
+                                WHEN ? > longest_streak
+                                THEN ?
+                                ELSE longest_streak
+                            END,
+                            highest_score = CASE
+                                WHEN ? > highest_score
+                                THEN ?
+                                ELSE highest_score
+                            END,
+                            last_played = datetime('now')
+                    """, (
+                        username, points, answer_time, current_streak, points,
+                        points, answer_time, answer_time, current_streak,
+                        current_streak, points, points
+                    ))
+                    conn.commit()
+                except sqlite3.Error as e:
+                    logger.error(f"Error updating score for {username}: {e}")
+                    conn.rollback()
+                    
+        await asyncio.get_event_loop().run_in_executor(None, _update)
 
-    def get_leaderboard(self, limit: int = 5) -> List[Dict[str, Any]]:
+    async def get_leaderboard(self, limit: int = 5) -> List[Dict[str, Any]]:
         """Get the top players by score."""
-        with self.get_connection() as conn:
-            cursor = conn.cursor()
-            try:
-                cursor.execute("""
-                    SELECT
-                        username, total_score, correct_answers,
-                        fastest_answer, longest_streak, highest_score
-                    FROM scores
-                    ORDER BY total_score DESC
-                    LIMIT ?
-                """, (limit,))
-                columns = [col[0] for col in cursor.description]
-                return [dict(zip(columns, row)) for row in cursor.fetchall()]
-            except sqlite3.Error as e:
-                logger.error(f"Error getting leaderboard: {e}")
-                return []
+        def _get_leaderboard():
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                try:
+                    cursor.execute("""
+                        SELECT
+                            username, total_score, correct_answers,
+                            fastest_answer, longest_streak, highest_score
+                        FROM scores
+                        ORDER BY total_score DESC
+                        LIMIT ?
+                    """, (limit,))
+                    columns = [col[0] for col in cursor.description]
+                    return [dict(zip(columns, row)) for row in cursor.fetchall()]
+                except sqlite3.Error as e:
+                    logger.error(f"Error getting leaderboard: {e}")
+                    return []
+                    
+        return await asyncio.get_event_loop().run_in_executor(None, _get_leaderboard)
 
-    def get_player_stats(self, username: str) -> Optional[Dict[str, Any]]:
+    async def get_player_stats(self, username: str) -> Optional[Dict[str, Any]]:
         """Get detailed statistics for a player."""
-        with self.get_connection() as conn:
-            cursor = conn.cursor()
-            try:
-                cursor.execute("""
-                    SELECT
-                        total_score, games_played, correct_answers,
-                        fastest_answer, longest_streak, highest_score
-                    FROM scores WHERE username = ?
-                """, (username,))
-                row = cursor.fetchone()
-                if row:
-                    return {
-                        "total_score": row[0],
-                        "games_played": row[1],
-                        "correct_answers": row[2],
-                        "fastest_answer": row[3],
-                        "longest_streak": row[4],
-                        "highest_score": row[5]
-                    }
-                return None
-            except sqlite3.Error as e:
-                logger.error(f"Error getting stats for {username}: {e}")
-                return None
+        def _get_stats():
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                try:
+                    cursor.execute("""
+                        SELECT
+                            total_score, games_played, correct_answers,
+                            fastest_answer, longest_streak, highest_score
+                        FROM scores WHERE username = ?
+                    """, (username,))
+                    row = cursor.fetchone()
+                    if row:
+                        return {
+                            "total_score": row[0],
+                            "games_played": row[1],
+                            "correct_answers": row[2],
+                            "fastest_answer": row[3],
+                            "longest_streak": row[4],
+                            "highest_score": row[5]
+                        }
+                    return None
+                except sqlite3.Error as e:
+                    logger.error(f"Error getting stats for {username}: {e}")
+                    return None
+                    
+        return await asyncio.get_event_loop().run_in_executor(None, _get_stats)
 
     def add_question_to_history(self, question: str, answer: str,
                               category: str) -> None:

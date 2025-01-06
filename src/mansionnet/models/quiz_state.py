@@ -22,6 +22,7 @@ class QuizState:
         self.question_time: Optional[datetime] = None
         self.last_question_time: Optional[datetime] = None
         self.question_lock = False
+        self.fun_fact: Optional[str] = None
         
         # Answer tracking
         self.current_round_answers: Set[str] = set()
@@ -32,14 +33,23 @@ class QuizState:
         # Timer
         self.timer: Optional[Timer] = None
 
-    def is_answer_valid(self, answer: str, elapsed_seconds: int) -> bool:
+    def get_elapsed_time(self) -> float:
+        """Safely calculate elapsed time."""
+        if not self.question_time:
+            return float('inf')
+        
+        now = datetime.now()
+        return (now - self.question_time).total_seconds()
+
+    def is_answer_valid(self, answer: str, elapsed_seconds: Optional[float] = None) -> bool:
         """Check if an answer attempt is valid."""
-        return (
-            self.active and 
-            self.current_question is not None and
-            not self.question_lock and
-            elapsed_seconds < self.answer_timeout
-        )
+        if not self.active or not self.current_question or self.question_lock:
+            return False
+
+        if elapsed_seconds is None:
+            elapsed_seconds = self.get_elapsed_time()
+
+        return elapsed_seconds < self.answer_timeout
 
     def reset_question_state(self) -> None:
         """Reset state for a new question."""
@@ -47,15 +57,18 @@ class QuizState:
         self.last_correct_answer = None
         self.question_time = datetime.now()
         self.question_lock = False
+        self.fun_fact = None
         
     def can_ask_question(self) -> bool:
         """Check if we can ask a new question."""
-        return (
-            self.active and
-            not self.question_lock and
-            (self.last_question_time is None or
-             (datetime.now() - self.last_question_time).total_seconds() >= 2)
-        )
+        if not self.active or self.question_lock:
+            return False
+            
+        if self.last_question_time:
+            time_since_last = (datetime.now() - self.last_question_time).total_seconds()
+            return time_since_last >= 2
+            
+        return True
         
     def lock_question(self) -> None:
         """Lock question state to prevent duplicate questions."""

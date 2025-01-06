@@ -2,6 +2,7 @@
 import logging
 import logging.config
 import sys
+import asyncio
 from pathlib import Path
 
 from .core.quiz_game import QuizGame
@@ -22,19 +23,18 @@ def setup_environment():
     logger.info("Starting MansionNet QuizBot...")
     return logger
 
-def main():
+async def main():
     """Main function to run the bot."""
     logger = setup_environment()
     
     try:
         quiz_game = QuizGame()
-        quiz_game.run()
+        await quiz_game.run()
     except KeyboardInterrupt:
         logger.info("Shutting down QuizBot...")
-        sys.exit(0)
     except Exception as e:
         logger.critical(f"Fatal error: {e}", exc_info=True)
         sys.exit(1)
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())

@@ -33,8 +33,8 @@ class MistralService:
         self.used_categories: List[str] = []
         self.last_api_call = 0
         self.min_delay = 2
-        self.timeout = 20
-        self.max_retries = 2
+        self.timeout = 30  # Increased timeout
+        self.max_retries = 3  # Increased retries
         self.fallback_attempt = 0
         self.max_fallback_attempts = 3
         self.validation_failures = 0
@@ -124,6 +124,7 @@ class MistralService:
         retries = 0
         while retries <= self.max_retries:
             try:
+                logger.debug(f"Making API request (attempt {retries + 1}/{self.max_retries + 1})")
                 self.last_api_call = time.time()
 
                 headers = {
@@ -138,22 +139,51 @@ class MistralService:
                     "max_tokens": 300
                 }
                 
-                response = requests.post(
-                    f"{self.base_url}/chat/completions",
-                    headers=headers,
-                    json=data,
-                    timeout=self.timeout
-                )
+                # Use a session for better connection handling
+                with requests.Session() as session:
+                    session.mount('https://', requests.adapters.HTTPAdapter(
+                        max_retries=requests.adapters.Retry(
+                            total=3,
+                            backoff_factor=1,
+                            status_forcelist=[429, 500, 502, 503, 504]
+                        )
+                    ))
+                    
+                    response = session.post(
+                        f"{self.base_url}/chat/completions",
+                        headers=headers,
+                        json=data,
+                        timeout=(5, self.timeout)  # (connect timeout, read timeout)
+                    )
                 
                 response.raise_for_status()
                 return response.json()
                 
             except requests.exceptions.Timeout:
-                logger.warning(f"API timeout (attempt {retries + 1}/{self.max_retries + 1})")
+                delay = (2 ** retries) * 2 + random.uniform(0, 1)  # Exponential backoff
+                logger.warning(f"API timeout (attempt {retries + 1}/{self.max_retries + 1}). Waiting {delay:.1f}s")
                 retries += 1
                 if retries <= self.max_retries:
-                    time.sleep(2 * retries)
+                    time.sleep(delay)
                 continue
+                
+            except requests.exceptions.ConnectionError as e:
+                logger.error(f"Connection error: {e}")
+                delay = (2 ** retries) * 2 + random.uniform(0, 1)
+                retries += 1
+                if retries <= self.max_retries:
+                    time.sleep(delay)
+                continue
+                
+            except requests.exceptions.HTTPError as e:
+                if e.response.status_code == 429:  # Rate limit
+                    delay = 5 + random.uniform(0, 2)  # Base 5s delay + jitter
+                    logger.warning(f"Rate limited. Waiting {delay:.1f}s")
+                    time.sleep(delay)
+                    retries += 1
+                    continue
+                logger.error(f"HTTP error: {e}")
+                return None
                 
             except requests.exceptions.RequestException as e:
                 logger.error(f"API request failed: {e}")
