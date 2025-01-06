@@ -1,12 +1,18 @@
 """Service for interacting with the Mistral AI API."""
 import os
-from typing import Dict, Tuple, Optional
+import time
+import random
 import logging
 import requests
-import random
+from typing import Dict, Tuple, Optional, Set
 from dotenv import load_dotenv
 
-from ..config.settings import QUIZ_CATEGORIES, COMPLEX_TERMS
+from ..config.settings import (
+    QUIZ_CATEGORIES, 
+    COMPLEX_TERMS, 
+    AMBIGUOUS_TERMS,
+    ALTERNATIVE_ANSWERS
+)
 from ..utils.question_validation import (
     validate_question_content,
     clean_question_text,
@@ -16,151 +22,204 @@ from ..utils.question_validation import (
 logger = logging.getLogger(__name__)
 
 class MistralService:
-    """Handles all interactions with the Mistral AI API."""
-
     def __init__(self):
-        """Initialize the Mistral AI service."""
         load_dotenv()
-        self.api_key = self._load_api_key()
-        self.base_url = "https://api.mistral.ai/v1"
-        self.model = "mistral-tiny"
-
-    def _load_api_key(self) -> str:
-        """Load the Mistral AI API key from environment variables."""
         api_key = os.getenv("MISTRAL_API_KEY")
         if not api_key:
             raise ValueError("MISTRAL_API_KEY not found in environment variables")
-        return api_key
+        self.api_key = api_key
+        self.base_url = "https://api.mistral.ai/v1"
+        self.model = "mistral-medium"
+        self.used_categories = set()
+        self.last_api_call = 0
+        self.min_delay = 2
+        self.timeout = 20
+        self.max_retries = 2
 
-    def _generate_prompt(self, category: str, subcategory: str, 
-                        difficulty: str) -> str:
-        """Generate a detailed prompt for the Mistral AI API."""
+    def _select_category(self) -> Tuple[str, str]:
+        if len(self.used_categories) >= len(QUIZ_CATEGORIES):
+            self.used_categories.clear()
+
+        available_categories = [
+            cat for cat in QUIZ_CATEGORIES.keys()
+            if cat not in self.used_categories
+        ]
+        
+        if not available_categories:
+            available_categories = list(QUIZ_CATEGORIES.keys())
+
+        category = random.choice(available_categories)
+        subcategory = random.choice(QUIZ_CATEGORIES[category])
+        
+        self.used_categories.add(category)
+        return category, subcategory
+
+    def _generate_prompt(self, category: str, subcategory: str, difficulty: str) -> str:
         return f"""Generate a {difficulty} trivia question about {subcategory} 
         (category: {category}) following these STRICT rules:
 
         ESSENTIAL REQUIREMENTS:
-        1. Question MUST be about ESTABLISHED, VERIFIED facts only
-        2. NO questions about recent or ongoing events
-        3. NO questions using words like "first", "only", "most", "best"
-        4. Focus on well-documented, mainstream topics
-        5. Answer MUST be immediately recognizable
-        6. Answer MUST be 1-3 words maximum
-        7. NO trick questions or complex wordplay
-        8. AVOID specific dates, numbers, or statistics
-        9. NO questions about "recent", "latest", or "current" events
-        10. Question should have only ONE clear, verifiable answer
+        1. Question MUST be about SPECIFIC, VERIFIABLE facts
+        2. Answer MUST be unique and unambiguous
+        3. Question should work internationally
+        4. Focus on enduring, well-known topics
+        5. No current events or recent developments
+        6. Answer must be 1-3 words maximum
+        7. Questions should be culturally neutral when possible
+        8. Avoid specific dates unless crucial
+        9. Questions should be engaging but fair
+        10. Include alternative acceptable answers if relevant
 
-        QUESTION STYLE:
-        - Simple, clear language
-        - Under 15 words
-        - No complex terminology
-        - Focused on popular culture, technology, sports, history, science, movies and entertainment
-        - Suitable for casual players and some expert
+        QUESTION STRUCTURE:
+        - Clear and concise (under 15 words)
+        - Direct question format
+        - No complex jargon or technical terms
+        - Avoid ambiguous words ({', '.join(list(AMBIGUOUS_TERMS)[:5])})
+        - Consider multiple valid answers
+        - Focus on fundamental knowledge
+
+        DIFFICULTY GUIDELINES:
+        - Easy: Common knowledge, everyday facts
+        - Medium: Requires specific knowledge but widely known
+        - Hard: Detailed knowledge but still fair
+
+        Example by category:
+        - Science: "Which element makes up most of Earth's atmosphere?" -> "nitrogen"
+        - History: "Which empire built the pyramids at Giza?" -> "egyptian"
+        - Geography: "Which mountain range separates Europe from Asia?" -> "ural"
+        - Arts: "Who painted the Mona Lisa?" -> "da vinci"
         
-        EXAMPLES OF GOOD QUESTIONS:
-        "What game features characters building with blocks?" -> "minecraft"
-        "Which streaming service produces The Crown series?" -> "netflix"
-        "What social platform uses a bird logo?" -> "twitter"
-        "Which company makes the iPhone?" -> "apple"
-
-        EXAMPLES OF BAD QUESTIONS:
-        "Who was the first person to..." (avoid superlatives)
-        "Which celebrity recently..." (avoid time-sensitive)
-        "What is the most popular..." (avoid rankings)
-        "Who is currently leading..." (avoid current events)
+        BAD EXAMPLES:
+        - "Who was the first person to..." (avoid superlatives)
+        - "Which recent movie..." (avoid time-sensitive)
+        - "What is the most popular..." (avoid subjective)
+        - "Who is currently..." (avoid current events)
 
         Format response EXACTLY as:
         Question: [your question]
-        Answer: [simple answer in lowercase]
-        Fun Fact: [brief, verifiable fact about the answer]"""
+        Answer: [simple answer]
+        Alternative Answers: [other acceptable answers, if any]
+        Fun Fact: [interesting, verifiable fact about the answer]"""
 
     def _make_api_request(self, messages: list) -> Optional[Dict]:
-        """Make a request to the Mistral AI API."""
-        try:
-            headers = {
-                "Authorization": f"Bearer {self.api_key}",
-                "Content-Type": "application/json"
-            }
-            
-            data = {
-                "model": self.model,
-                "messages": messages,
-                "temperature": 0.7,
-                "max_tokens": 300
-            }
-            
-            response = requests.post(
-                f"{self.base_url}/chat/completions",
-                headers=headers,
-                json=data,
-                timeout=10
-            )
-            
-            response.raise_for_status()
-            return response.json()
-            
-        except requests.exceptions.RequestException as e:
-            logger.error(f"API request failed: {e}")
-            return None
+        current_time = time.time()
+        time_since_last_call = current_time - self.last_api_call
+        if time_since_last_call < self.min_delay:
+            time.sleep(self.min_delay - time_since_last_call)
 
-    def _parse_response(self, content: str) -> Tuple[Optional[str], Optional[str], Optional[str]]:
-        """Parse the API response into question, answer, and fun fact."""
+        retries = 0
+        while retries <= self.max_retries:
+            try:
+                self.last_api_call = time.time()
+
+                headers = {
+                    "Authorization": f"Bearer {self.api_key}",
+                    "Content-Type": "application/json"
+                }
+                
+                data = {
+                    "model": self.model,
+                    "messages": messages,
+                    "temperature": 0.7,
+                    "max_tokens": 300
+                }
+                
+                response = requests.post(
+                    f"{self.base_url}/chat/completions",
+                    headers=headers,
+                    json=data,
+                    timeout=self.timeout
+                )
+                
+                response.raise_for_status()
+                return response.json()
+                
+            except requests.exceptions.Timeout:
+                logger.warning(f"API timeout (attempt {retries + 1}/{self.max_retries + 1})")
+                retries += 1
+                if retries <= self.max_retries:
+                    time.sleep(2 * retries)
+                continue
+                
+            except requests.exceptions.RequestException as e:
+                logger.error(f"API request failed: {e}")
+                return None
+
+        logger.error("All API retry attempts failed")
+        return None
+
+    def _parse_response(self, content: str) -> Tuple[Optional[str], Optional[str], Set[str], Optional[str]]:
         try:
             parts = content.split('Question: ')[1].split('Answer:')
             question = clean_question_text(parts[0].strip())
-            answer_part = parts[1].split('Fun Fact:')
-            answer = normalize_answer(answer_part[0].strip())
-            fun_fact = answer_part[1].strip() if len(answer_part) > 1 else None
             
-            return question, answer, fun_fact
+            remaining = parts[1].split('Alternative Answers:')
+            primary_answer = normalize_answer(remaining[0].strip())
+            
+            alt_and_fact = remaining[1].split('Fun Fact:')
+            alternative_answers = {
+                normalize_answer(ans.strip())
+                for ans in alt_and_fact[0].strip().split(',')
+                if ans.strip()
+            }
+            
+            fun_fact = alt_and_fact[1].strip()
+            
+            return question, primary_answer, alternative_answers, fun_fact
+            
         except (IndexError, AttributeError) as e:
             logger.error(f"Failed to parse API response: {e}")
-            return None, None, None
+            return None, None, set(), None
 
-    def _is_valid_question(self, question: str, answer: str) -> bool:
-        """Validate the generated question and answer."""
+    def _is_valid_question(self, question: str, answer: str, alt_answers: Set[str]) -> bool:
         is_valid, reason = validate_question_content(question, answer)
         if not is_valid:
             logger.debug(f"Question rejected: {reason}")
             return False
-            
-        # Check for complex terms
+
         if any(term in question.lower() for term in COMPLEX_TERMS):
             logger.debug("Question rejected: Contains complex terms")
             return False
-        
+
+        if any(term in question.lower() for term in AMBIGUOUS_TERMS):
+            logger.debug("Question rejected: Contains ambiguous terms")
+            return False
+
+        if len(answer.split()) > 3:
+            logger.debug("Answer rejected: Too long")
+            return False
+
+        if answer in ALTERNATIVE_ANSWERS:
+            alt_answers.update(ALTERNATIVE_ANSWERS[answer])
+
         return True
 
     def get_trivia_question(self, excluded_questions: set) -> Optional[Tuple[str, str, str]]:
-        """Get a trivia question from Mistral AI."""
-        max_attempts = 3
         attempts = 0
+        max_attempts = 2
         
         while attempts < max_attempts:
             try:
-                # Select a random category and subcategory
-                category = random.choice(list(QUIZ_CATEGORIES.keys()))
-                subcategory = random.choice(QUIZ_CATEGORIES[category])
+                category, subcategory = self._select_category()
+                
                 difficulty = random.choices(
                     ['easy', 'medium', 'hard'],
                     weights=[0.6, 0.3, 0.1]
                 )[0]
                 
-                # Generate the prompt
                 prompt = self._generate_prompt(category, subcategory, difficulty)
                 
-                # Make API request
                 response = self._make_api_request([{
                     "role": "user",
                     "content": prompt
                 }])
                 
                 if not response:
+                    logger.warning(f"Failed to get response from API (attempt {attempts + 1}/{max_attempts})")
                     attempts += 1
                     continue
                 
-                # Parse response
-                question, answer, fun_fact = self._parse_response(
+                question, answer, alt_answers, fun_fact = self._parse_response(
                     response['choices'][0]['message']['content']
                 )
                 
@@ -168,58 +227,100 @@ class MistralService:
                     attempts += 1
                     continue
                 
-                # Validate question
-                if not self._is_valid_question(question, answer):
+                if not self._is_valid_question(question, answer, alt_answers):
                     attempts += 1
                     continue
                 
-                # Check if question was already used
                 question_hash = f"{question}:{answer}"
                 if question_hash in excluded_questions:
                     attempts += 1
                     continue
-                
+
                 return question, answer, fun_fact
                 
             except Exception as e:
                 logger.error(f"Error generating question: {e}")
                 attempts += 1
         
-        # If all attempts fail, return a fallback question
+        logger.info("Falling back to predefined question after all attempts failed")
         return self._get_fallback_question()
 
     def _get_fallback_question(self) -> Tuple[str, str, str]:
-        """Provide a fallback question when API fails."""
         fallback_questions = [
             (
-                "What social media app features disappearing photos?",
-                "snapchat",
-                "Snapchat was originally called 'Picaboo' when it launched."
+                "Which element is the most abundant in Earth's atmosphere?",
+                "nitrogen",
+                "Nitrogen makes up about 78% of Earth's atmosphere."
             ),
             (
-                "Which game features players building with colored blocks?",
-                "minecraft",
-                "Minecraft has sold over 200 million copies worldwide."
+                "Which ancient civilization built the pyramids at Giza?",
+                "egyptian",
+                "The Great Pyramid took around 20 years to build."
             ),
             (
-                "What gaming console competes with Xbox?",
-                "playstation",
-                "PlayStation was originally developed as a Nintendo partnership."
+                "Which mountain range separates Europe from Asia?",
+                "ural",
+                "The Ural Mountains extend about 2,500 km from north to south."
             ),
             (
-                "Which streaming service created The Mandalorian?",
-                "disney+",
-                "The Mandalorian was one of the launch shows for Disney+."
+                "Who painted the Mona Lisa?",
+                "da vinci",
+                "The Mona Lisa was painted in the early 16th century."
             ),
             (
-                "What company makes Windows?",
-                "microsoft",
-                "Windows was first released in 1985."
+                "Which instrument has 88 keys?",
+                "piano",
+                "The modern piano was invented by Bartolomeo Cristofori around 1700."
             ),
             (
-                "Which company owns YouTube?",
-                "google",
-                "Google bought YouTube in 2006 for $1.65 billion."
+                "Which playwright wrote Romeo and Juliet?",
+                "shakespeare",
+                "Romeo and Juliet was written between 1591 and 1595."
+            ),
+            (
+                "What force pulls objects toward Earth?",
+                "gravity",
+                "Gravity was first described mathematically by Isaac Newton."
+            ),
+            (
+                "Which gas do plants absorb from the air?",
+                "carbon dioxide",
+                "Plants convert carbon dioxide into oxygen through photosynthesis."
+            ),
+            (
+                "Which planet is known as the Red Planet?",
+                "mars",
+                "Mars gets its red color from iron oxide (rust) on its surface."
+            ),
+            (
+                "What organ pumps blood through the body?",
+                "heart",
+                "The average heart beats over 100,000 times per day."
+            ),
+            (
+                "How many players are on a soccer team during a match?",
+                "eleven",
+                "The rules establishing 11 players were set in 1897."
+            ),
+            (
+                "Which scientist is known for discovering electricity?",
+                "franklin",
+                "Benjamin Franklin conducted his famous kite experiment in 1752."
+            ),
+            (
+                "What is the name for a three-sided shape?",
+                "triangle",
+                "A triangle's three angles always add up to 180 degrees."
+            ),
+            (
+                "Which galaxy contains our solar system?",
+                "milky way",
+                "The Milky Way contains over 100 billion stars."
+            ),
+            (
+                "Which big cat has black stripes?",
+                "tiger",
+                "Each tiger's stripe pattern is unique, like human fingerprints."
             )
         ]
         

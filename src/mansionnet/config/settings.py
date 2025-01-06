@@ -44,26 +44,124 @@ DB_CONFIG = {
 
 # Categories for quiz questions
 QUIZ_CATEGORIES: Dict[str, List[str]] = {
-    "Pop Culture": [
-        "Movies & TV", "Music", "Video Games", "Social Media",
-        "Celebrities", "Recent Events", "Internet Culture"
+    "Science": [
+        "Physics & Space",
+        "Biology & Nature",
+        "Chemistry",
+        "Human Body",
+        "Inventions",
+        "Environmental Science",
+        "Computing & Tech"
     ],
-    "Sports & Games": [
-        "Football/Soccer", "Basketball", "Olympics", "Popular Athletes",
-        "Gaming", "eSports", "Sports History"
+    "History": [
+        "Ancient Civilizations",
+        "Middle Ages",
+        "Renaissance",
+        "World Wars",
+        "American History",
+        "European History",
+        "Asian History",
+        "African History",
+        "Important Discoveries"
     ],
-    "Science & Tech": [
-        "Everyday Science", "Modern Technology", "Space Exploration",
-        "Famous Inventions", "Internet & Apps", "Gadgets"
+    "Geography": [
+        "Countries & Capitals",
+        "Mountains & Rivers",
+        "Oceans & Seas",
+        "Famous Landmarks",
+        "Climate & Weather",
+        "Natural Wonders",
+        "World Cities"
     ],
-    "History & Current Events": [
-        "Modern History (1950+)", "Famous People", "Major Events",
-        "Recent News", "Popular Movements"
+    "Arts & Culture": [
+        "Classical Music",
+        "Modern Music",
+        "Painting & Sculpture",
+        "Literature & Authors",
+        "Theater & Dance",
+        "Architecture",
+        "Museums & Galleries"
     ],
-    "General Knowledge": [
-        "Food & Drink", "Countries & Cities", "Famous Landmarks",
-        "Popular Brands", "Trending Topics"
+    "Entertainment": [
+        "Classic Movies",
+        "Modern Films",
+        "Television Shows",
+        "Video Games",
+        "Comics & Animation",
+        "Celebrities",
+        "Awards & Honors"
+    ],
+    "Sports": [
+        "Olympic Sports",
+        "Team Sports",
+        "Individual Sports",
+        "Sports History",
+        "Championships",
+        "Notable Athletes",
+        "Sports Records"
+    ],
+    "Language & Literature": [
+        "Famous Books",
+        "Classic Authors",
+        "Poetry",
+        "World Languages",
+        "Etymology",
+        "Literary Characters",
+        "Mythology"
+    ],
+    "STEM": [
+        "Mathematics",
+        "Computer Science",
+        "Engineering",
+        "Scientific Method",
+        "Famous Scientists",
+        "Technology History",
+        "Discoveries & Breakthroughs"
     ]
+}
+
+# Terms that indicate potentially ambiguous questions
+AMBIGUOUS_TERMS = {
+    'most', 'best', 'first', 'many', 'several', 'some',
+    'few', 'often', 'usually', 'typically', 'recently',
+    'current', 'latest', 'modern', 'popular', 'famous'
+}
+
+# Complex terms to avoid in questions
+COMPLEX_TERMS = {
+    'genome', 'algorithm', 'quantum', 'molecular', 'theorem',
+    'coefficient', 'synthesis', 'paradigm', 'pursuant',
+    'infrastructure', 'implementation', 'methodology',
+    'heterogeneous', 'apparatus', 'nomenclature', 'derivative',
+    'manifold', 'epistemology', 'optimization', 'polymorphic'
+}
+
+# Alternative answers mapping
+ALTERNATIVE_ANSWERS = {
+    'usa': ['united states', 'america', 'us'],
+    'uk': ['united kingdom', 'britain', 'great britain'],
+    'earth': ['terra', 'world', 'globe'],
+    'sun': ['sol'],
+    'moon': ['luna'],
+    'automobile': ['car', 'vehicle'],
+    'television': ['tv'],
+    'mac': ['macintosh', 'apple computer'],
+    'pc': ['personal computer', 'desktop computer'],
+    'www': ['world wide web', 'web'],
+    'phone': ['telephone', 'mobile', 'cellphone'],
+    'movie': ['film', 'motion picture'],
+    'airplane': ['plane', 'aircraft'],
+    'bike': ['bicycle'],
+    'internet': ['net', 'cyberspace'],
+    'doctor': ['dr', 'physician'],
+    'mathematics': ['math', 'maths'],
+    'laboratory': ['lab'],
+    'photograph': ['photo', 'picture', 'pic'],
+    'microphone': ['mic'],
+    'application': ['app', 'program'],
+    'advertisement': ['ad', 'advert', 'commercial'],
+    'representative': ['rep'],
+    'professor': ['prof']
 }
 
 # Logging Configuration
@@ -94,13 +192,6 @@ LOGGING_CONFIG = {
             "level": "DEBUG",
         },
     },
-}
-
-# Complex terms to avoid in questions
-COMPLEX_TERMS = {
-    'genome', 'algorithm', 'quantum', 'molecular', 'theorem',
-    'coefficient', 'synthesis', 'paradigm', 'pursuant',
-    'infrastructure', 'implementation', 'methodology'
 }
 
 # IRC Message Formatting

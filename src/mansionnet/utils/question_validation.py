@@ -1,137 +1,122 @@
-"""Utilities for question validation and answer matching."""
+"""Utilities for validating quiz questions."""
 import re
-from typing import List, Set
+from typing import Tuple, Dict, Set
+from ..config.settings import AMBIGUOUS_TERMS, COMPLEX_TERMS, ALTERNATIVE_ANSWERS
 
-# Words that suggest uncertain or ongoing events
-UNCERTAIN_TERMS = {
-    'recently', 'just', 'latest', 'current', 'ongoing', 'now',
-    'this year', 'this month', 'this week', 'today'
-}
-
-# Words that suggest absolute claims that need verification
-ABSOLUTE_CLAIMS = {
-    'first', 'only', 'best', 'most', 'youngest', 'oldest',
-    'highest', 'lowest', 'biggest', 'smallest'
-}
-
-# Common answer variations to support
-ANSWER_VARIATIONS = {
-    'epic games': ['epic'],
-    'meta': ['facebook'],
-    'microsoft': ['ms'],
-    'playstation': ['ps', 'ps4', 'ps5'],
-    'netflix': ['nflx'],
-    'call of duty': ['cod'],
-    'fortnite': ['fn'],
-    'instagram': ['ig', 'insta'],
-}
-
-def has_uncertain_timing(question: str) -> bool:
-    """Check if question refers to uncertain or recent timing."""
-    return any(term in question.lower() for term in UNCERTAIN_TERMS)
-
-def has_absolute_claim(question: str) -> bool:
-    """Check if question makes an absolute claim that needs verification."""
-    return any(claim in question.lower() for claim in ABSOLUTE_CLAIMS)
-
-def normalize_answer(answer: str) -> str:
-    """Normalize an answer for comparison."""
-    # Remove articles and extra whitespace
-    answer = re.sub(r'\b(the|a|an)\b', '', answer.lower())
-    answer = ' '.join(answer.split())
-    return answer
-
-def get_acceptable_answers(answer: str) -> Set[str]:
-    """Get all acceptable variations of an answer."""
-    answer = normalize_answer(answer)
-    variations = {answer}
-    
-    # Add known variations
-    for main_answer, alternates in ANSWER_VARIATIONS.items():
-        if answer == normalize_answer(main_answer):
-            variations.update(alternates)
-            break
-        for alt in alternates:
-            if answer == normalize_answer(alt):
-                variations.add(main_answer)
-                variations.update(alternates)
-                break
-    
-    # Add singular/plural variations
-    if not answer.endswith('s'):
-        variations.add(answer + 's')
-    else:
-        variations.add(answer[:-1])
-    
-    return variations
-
-def is_answer_match(user_answer: str, correct_answer: str) -> bool:
-    """Check if a user's answer matches any acceptable variation."""
-    user_answer = normalize_answer(user_answer)
-    acceptable_answers = get_acceptable_answers(correct_answer)
-    
-    # Direct match with any acceptable answer
-    if user_answer in acceptable_answers:
-        return True
-    
-    # Check if answer is a subset/superset of correct answer (for compound answers)
-    user_words = set(user_answer.split())
-    for acceptable in acceptable_answers:
-        acceptable_words = set(acceptable.split())
-        if user_words.issubset(acceptable_words) or acceptable_words.issubset(user_words):
-            return True
-    
-    # For single-word answers, check for close matches
-    if len(user_words) == 1 and len(acceptable_words) == 1:
-        user_word = user_words.pop()
-        acceptable_word = acceptable_words.pop()
-        # Check if user answer is a substring of acceptable answer
-        if len(user_word) > 3 and (user_word in acceptable_word or acceptable_word in user_word):
-            return True
-    
-    return False
-
-def validate_question_content(question: str, answer: str) -> tuple[bool, str]:
-    """Validate question content and format.
-    Returns (is_valid, reason_if_invalid)"""
-    
-    # Check question length
-    if len(question.split()) > 15:
-        return False, "Question is too long"
-    
-    # Check answer length
-    if len(answer.split()) > 3:
-        return False, "Answer is too long"
-    
-    # Check for uncertain timing
-    if has_uncertain_timing(question):
-        return False, "Question refers to uncertain timing"
-    
-    # Check for unverifiable absolute claims
-    if has_absolute_claim(question):
-        return False, "Question makes unverifiable absolute claim"
-    
-    # Check for numeric specificity
-    if re.search(r'\b\d{4}\b', question):
-        return False, "Question contains specific year"
-    
-    # Check for overly complex language
-    avg_word_length = sum(len(word) for word in question.split()) / len(question.split())
-    if avg_word_length > 8:
-        return False, "Question uses overly complex language"
-    
-    return True, ""
-
-def clean_question_text(question: str) -> str:
-    """Clean and format question text."""
-    # Remove extra whitespace
-    question = ' '.join(question.split())
-    
-    # Ensure proper capitalization
-    question = question[0].upper() + question[1:]
+def clean_question_text(text: str) -> str:
+    """Clean and normalize question text."""
+    # Remove multiple spaces
+    text = re.sub(r'\s+', ' ', text.strip())
     
     # Ensure question ends with question mark
-    if not question.endswith('?'):
-        question += '?'
+    if not text.endswith('?'):
+        text += '?'
     
-    return question
+    # Capitalize first letter
+    text = text[0].upper() + text[1:]
+    
+    return text
+
+def normalize_answer(answer: str) -> str:
+    """Normalize answer text for consistent comparison."""
+    # Convert to lowercase and remove extra spaces
+    answer = re.sub(r'\s+', ' ', answer.strip().lower())
+    
+    # Remove articles and common prefixes
+    answer = re.sub(r'^(the|a|an) ', '', answer)
+    
+    # Remove punctuation except hyphens
+    answer = re.sub(r'[^\w\s-]', '', answer)
+    
+    return answer
+
+def is_valid_length(text: str, min_words: int = 3, max_words: int = 15) -> bool:
+    """Check if text length is within acceptable range."""
+    words = text.split()
+    return min_words <= len(words) <= max_words
+
+def contains_prohibited_terms(text: str, terms: Set[str]) -> bool:
+    """Check if text contains any prohibited terms."""
+    text_lower = text.lower()
+    return any(term.lower() in text_lower for term in terms)
+
+def is_specific_enough(question: str) -> bool:
+    """Check if question is specific enough to have a clear answer."""
+    vague_patterns = [
+        r'what (kind|type|sort) of',
+        r'how (many|much)',
+        r'(who|what|which) are',
+        r'(can|could) you',
+        r'tell me'
+    ]
+    return not any(re.search(pattern, question.lower()) for pattern in vague_patterns)
+
+def has_clear_context(question: str) -> bool:
+    """Check if question provides enough context."""
+    # Questions should generally mention a specific subject/topic
+    return any(x in question.lower() for x in ['who', 'what', 'which', 'where', 'when', 'how'])
+
+def validate_question_content(
+    question: str,
+    answer: str,
+    min_question_length: int = 3,
+    max_question_length: int = 15,
+    max_answer_words: int = 3
+) -> Tuple[bool, str]:
+    """Validate question and answer content."""
+    # Check question length
+    if not is_valid_length(question, min_question_length, max_question_length):
+        return False, "Question length outside acceptable range"
+    
+    # Check answer length
+    if len(answer.split()) > max_answer_words:
+        return False, "Answer too long"
+    
+    # Check for ambiguous terms
+    if contains_prohibited_terms(question, AMBIGUOUS_TERMS):
+        return False, "Question contains ambiguous terms"
+    
+    # Check for complex terms
+    if contains_prohibited_terms(question, COMPLEX_TERMS):
+        return False, "Question contains complex terms"
+    
+    # Check for specific enough question
+    if not is_specific_enough(question):
+        return False, "Question not specific enough"
+    
+    # Check for clear context
+    if not has_clear_context(question):
+        return False, "Question lacks clear context"
+    
+    # Check answer format
+    if not re.match(r'^[\w\s-]+$', answer):
+        return False, "Answer contains invalid characters"
+    
+    return True, "Valid question"
+
+def get_alternative_answers(answer: str) -> Set[str]:
+    """Get all acceptable alternative answers for a given answer."""
+    alternatives = {answer}
+    
+    # Check main alternatives
+    if answer in ALTERNATIVE_ANSWERS:
+        alternatives.update(ALTERNATIVE_ANSWERS[answer])
+    
+    # Check reverse mapping
+    for main_answer, alts in ALTERNATIVE_ANSWERS.items():
+        if answer in alts:
+            alternatives.add(main_answer)
+            alternatives.update(alts)
+    
+    return alternatives
+
+def is_answer_match(user_answer: str, correct_answer: str) -> bool:
+    """Check if user's answer matches any acceptable version of the correct answer."""
+    user_answer = normalize_answer(user_answer)
+    correct_answer = normalize_answer(correct_answer)
+    
+    # Get all acceptable versions of the correct answer
+    valid_answers = get_alternative_answers(correct_answer)
+    
+    # Check against all valid answers
+    return user_answer in {normalize_answer(ans) for ans in valid_answers}
