@@ -2,6 +2,19 @@
 
 An IRC-based trivia game bot powered by Mistral AI for dynamic question generation. The bot provides engaging real-time quiz games with features like score tracking, bonus points, and comprehensive statistics.
 
+## Recent Improvements (January 2025)
+- Enhanced question validation with multiple retry attempts
+- Improved error handling for API failures
+- More diverse question generation across multiple categories
+- Added informative fun facts after each answer
+- Fixed question repetition issues
+- Improved answer matching system with better handling of:
+  - Diacritics (e.g., "Gaudí" vs "Gaudi")
+  - Common name variations
+  - Alternative spellings
+  - Name variations (e.g., "da Vinci" vs "Leonardo")
+  - Historical references
+
 ## Features
 
 ### Core Functionality
@@ -11,6 +24,7 @@ An IRC-based trivia game bot powered by Mistral AI for dynamic question generati
 - Multi-channel support
 - Persistent score tracking
 - Global leaderboards
+- Fun facts for every question
 
 ### Game Features
 - 10 questions per game session
@@ -20,13 +34,43 @@ An IRC-based trivia game bot powered by Mistral AI for dynamic question generati
 - Quick answer bonuses up to 2.0x multiplier
 - Player statistics tracking
 - Answer validation with fuzzy matching
+- Educational fun facts after each question
 
 ### Question Categories
-- Pop Culture (Movies, TV, Music, Social Media)
-- Sports & Games
-- Science & Tech
-- History & Current Events
-- General Knowledge
+- Science & Technology
+  - Physics & Space
+  - Biology & Nature
+  - Computing & Tech
+  - Environmental Science
+- History & Geography
+  - Ancient Civilizations
+  - World History
+  - Countries & Capitals
+  - Famous Landmarks
+- Arts & Culture
+  - Classical Music
+  - Literature & Authors
+  - Painting & Sculpture
+  - Architecture
+- Entertainment
+  - Classic Movies
+  - Television
+  - Video Games
+  - Sports & Athletics
+
+## Example Game Session
+```
+[19:00:56] <QuizBot> 🎯 New Quiz Starting!
+[19:00:56] <QuizBot> • Type your answer in the channel
+[19:00:56] <QuizBot> • 30 seconds per question
+[19:00:56] <QuizBot> • 10 questions total
+[19:00:56] <QuizBot> • Faster answers = More points
+[19:00:56] <QuizBot> • Get bonus points for answer streaks
+[19:00:58] <QuizBot> Question 1/10: Who painted the Mona Lisa?
+[19:01:03] <Player1> da vinci
+[19:01:03] <QuizBot> ✨ Player1 got 7 points! (Base: 5 × Bonus: 1.5)
+[19:01:03] <QuizBot> 💡 The Mona Lisa was painted in the early 16th century.
+```
 
 ## Setup
 
@@ -34,8 +78,11 @@ An IRC-based trivia game bot powered by Mistral AI for dynamic question generati
 - Python 3.8 or higher
 - Mistral AI API key
 - Access to an IRC server
+- SQLite3 (included in Python)
 
 ### Installation
+
+#### Linux/macOS
 1. Clone the repository:
 ```bash
 git clone https://github.com/yourusername/quizbot.git
@@ -45,7 +92,7 @@ cd quizbot
 2. Create and activate a virtual environment:
 ```bash
 python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
+source venv/bin/activate
 ```
 
 3. Install dependencies:
@@ -56,6 +103,29 @@ pip install -r requirements.txt
 4. Create a .env file with your Mistral AI API key:
 ```bash
 MISTRAL_API_KEY=your_api_key_here
+```
+
+#### Windows
+1. Clone the repository:
+```cmd
+git clone https://github.com/yourusername/quizbot.git
+cd quizbot
+```
+
+2. Create and activate a virtual environment:
+```cmd
+python -m venv venv
+venv\Scripts\activate
+```
+
+3. Install dependencies:
+```cmd
+pip install -r requirements.txt
+```
+
+4. Create a .env file with your Mistral AI API key:
+```cmd
+echo MISTRAL_API_KEY=your_api_key_here > .env
 ```
 
 ### Configuration
@@ -88,6 +158,7 @@ python -m src.mansionnet
 3. Type answers directly in the channel
 4. First correct answer wins the points
 5. Faster answers earn more points
+6. After each answer, a fun fact is shared
 
 #### Scoring System
 1. Base Points (1-10)
@@ -110,6 +181,9 @@ python -m src.mansionnet
 - Supports common abbreviations
 - Handles singular/plural variations
 - Accepts partial answers for long names
+- Handles diacritics and special characters
+- Recognizes common name variations
+- Supports alternative spellings
 
 ## Project Structure
 ```
@@ -159,6 +233,18 @@ The bot uses Mistral AI with carefully crafted prompts to ensure:
 - Answers are unambiguous
 - Content is engaging and current
 - Questions are appropriate difficulty
+- Each question includes an interesting fun fact
+- Multiple retry attempts with appropriate delays
+- Fallback questions for API failures
+
+### Reliability Features
+- Graceful handling of API failures
+- Multiple retry attempts for question generation
+- Smart question validation system
+- Proper delay between retries to avoid rate limits
+- Comprehensive error logging
+- State management protection
+- Fallback question system
 
 ### IRC Integration
 - SSL/TLS support
@@ -167,50 +253,55 @@ The bot uses Mistral AI with carefully crafted prompts to ensure:
 - Color and formatting support
 - Channel mode awareness
 
-## Development
+## Common Issues and Solutions
 
-### Adding New Features
+### Connection Problems
+1. Bot fails to connect to IRC server
+   - Verify server address and port in settings.py
+   - Check if SSL/TLS is required
+   - Ensure server allows bot connections
 
-#### New Question Types
-1. Modify `services/mistral_service.py`
-2. Update prompt templates
-3. Add validation rules
+2. Bot connects but doesn't join channels
+   - Verify channel names are correct (including #)
+   - Check if channels require authentication
+   - Ensure bot has necessary permissions
 
-#### Custom Game Modes
-1. Extend `core/quiz_game.py`
-2. Add mode-specific scoring rules
-3. Update database schema if needed
+### Question Generation
+1. Questions stop generating
+   - Check Mistral AI API key validity
+   - Verify API rate limits haven't been exceeded
+   - Check network connectivity
+   - The bot will automatically retry and use fallback questions
 
-#### UI Improvements
-1. Modify IRC message formatting in `services/irc_service.py`
-2. Add new color schemes in settings
-3. Update command responses
+2. Questions seem repetitive
+   - Check question_history table isn't full
+   - Verify category distribution settings
+   - Clear question history if necessary
 
-### Testing
-Create test files in `tests/` directory following the module structure.
+3. Answer validation issues
+   - Add common variations to ALTERNATIVE_ANSWERS in settings
+   - Adjust fuzzy matching threshold
+   - Update diacritic mappings
 
-## Troubleshooting
+### Database Issues
+1. Database errors
+   - Check file permissions on quiz.db
+   - Verify SQLite version compatibility
+   - Ensure sufficient disk space
+   - Backup database regularly
 
-### Common Issues
-1. Connection Problems
-   - Verify IRC server details
-   - Check SSL certificate settings
-   - Confirm network connectivity
+### Performance
+1. Bot becomes slow
+   - Monitor API response times
+   - Check database query performance
+   - Reduce number of concurrent channels
+   - Adjust question timeouts
 
-2. Question Generation
-   - Validate Mistral AI API key
-   - Check API rate limits
-   - Monitor response quality
-
-3. Database Issues
-   - Verify file permissions
-   - Check disk space
-   - Monitor connection pool
-
-### Logging
-- Location: `logs/quizbot.log`
-- Levels: DEBUG, INFO, WARNING, ERROR
-- Rotation: Daily with 7-day retention
+2. High resource usage
+   - Monitor memory usage
+   - Check for connection leaks
+   - Reduce logging verbosity
+   - Adjust database connection pool
 
 ## Contributing
 1. Fork the repository
