@@ -2,6 +2,14 @@
 
 An IRC-based trivia game bot powered by Mistral AI for dynamic question generation. The bot provides engaging real-time quiz games with features like score tracking, bonus points, and comprehensive statistics.
 
+## IRC Server Details
+
+Join us on MansionNET IRC to chat with us, test the bot, and play some trivia! 
+
+🌐 **Server:** irc.inthemansion.com  
+🔒 **Port:** 6697 (SSL)  
+📝 **Channel:** #opers 
+
 ## Recent Improvements (January 2025)
 - Enhanced question validation with multiple retry attempts
 - Improved error handling for API failures
