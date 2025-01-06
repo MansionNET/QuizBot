@@ -2,6 +2,7 @@
 from difflib import SequenceMatcher
 from typing import Tuple, Dict, Set
 import re
+import unicodedata
 
 class AnswerMatcher:
     """Improved answer matching system with support for variations and alternatives."""
@@ -26,6 +27,12 @@ class AnswerMatcher:
             # Historical/Famous People
             "thomas edison": {"edison", "thomas a edison", "t edison"},
             "leonardo da vinci": {"da vinci", "davinci", "leonardo", "leonardo davinci"},
+            "gaudi": {"gaudí", "gaudy", "gaudi", "antoni gaudi", "antonio gaudi"},
+            "shakespeare": {"william shakespeare", "shakespear"},
+            "beethoven": {"ludwig van beethoven", "ludvig beethoven", "bethoven"},
+            "doctor who": {"who", "the doctor", "dr who"},
+            "michelangelo": {"michaelangelo", "michel angelo"},
+            "austen": {"jane austen", "austin", "austeen", "jane austin"},
             
             # Sports and Events
             "olympics": {"olympic games", "olympic", "the olympics"},
@@ -45,7 +52,12 @@ class AnswerMatcher:
             "united states": {"usa", "us", "united states of america", "america"},
             "united kingdom": {"uk", "britain", "great britain"},
             "european union": {"eu"},
-            "soviet union": {"ussr", "soviet", "russia"}
+            "soviet union": {"ussr", "soviet", "russia"},
+            
+            # Historical Groups
+            "ancient britons": {"britons", "ancient brits", "celtic britons"},
+            "monks": {"monk", "monastics", "monastic"},
+            "monastery": {"monasteries", "monastic", "abbey"}
         }
         
         # Build reverse lookup for variations
@@ -53,10 +65,16 @@ class AnswerMatcher:
         for main, variants in self.variations.items():
             for variant in variants:
                 self.reverse_variations[variant] = main
+
+    def remove_diacritics(self, text: str) -> str:
+        """Remove diacritical marks from text."""
+        return ''.join(c for c in unicodedata.normalize('NFKD', text)
+                      if not unicodedata.combining(c))
                 
     def normalize_text(self, text: str) -> str:
         """Normalize text for comparison."""
         text = text.lower().strip()
+        text = self.remove_diacritics(text)  # Handle diacritics
         text = re.sub(r'[^\w\s-]', '', text)
         text = re.sub(r'\s+', ' ', text)
         return text
@@ -64,13 +82,30 @@ class AnswerMatcher:
     def get_similarity_ratio(self, a: str, b: str) -> float:
         """Calculate similarity ratio between two strings."""
         return SequenceMatcher(None, a, b).ratio()
+
+    def check_name_match(self, user_answer: str, correct_answer: str) -> bool:
+        """Special handling for name matching."""
+        # Check if either answer contains spaces (indicating a full name)
+        if ' ' in user_answer or ' ' in correct_answer:
+            user_parts = set(user_answer.split())
+            correct_parts = set(correct_answer.split())
+            
+            # Check if all parts of the shorter name are in the longer name
+            if len(user_parts) < len(correct_parts):
+                return all(any(self.get_similarity_ratio(up, cp) > 0.8 for cp in correct_parts) 
+                          for up in user_parts)
+            else:
+                return all(any(self.get_similarity_ratio(cp, up) > 0.8 for up in user_parts) 
+                          for cp in correct_parts)
+        
+        return False
         
     def is_match(self, user_answer: str, correct_answer: str, threshold: float = 0.85) -> bool:
         """Check if user's answer matches the correct answer."""
         user_answer = self.normalize_text(user_answer)
         correct_answer = self.normalize_text(correct_answer)
         
-        # Direct match
+        # Direct match after normalization
         if user_answer == correct_answer:
             return True
             
@@ -97,9 +132,21 @@ class AnswerMatcher:
         if correct_answer.endswith('s') and correct_answer[:-1] == user_answer:
             return True
             
+        # Try name matching for longer answers
+        if len(user_answer) > 3 and len(correct_answer) > 3:
+            if self.check_name_match(user_answer, correct_answer):
+                return True
+            
+        # More lenient threshold for short answers
+        current_threshold = threshold
+        if len(correct_answer) <= 5:
+            current_threshold = 0.9  # Stricter for short answers
+        elif len(correct_answer) >= 10:
+            current_threshold = 0.8  # More lenient for longer answers
+            
         # Fuzzy matching for typos
         similarity = self.get_similarity_ratio(user_answer, correct_answer)
-        if similarity >= threshold:
+        if similarity >= current_threshold:
             return True
             
         return False

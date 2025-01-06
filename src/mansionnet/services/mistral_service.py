@@ -35,6 +35,8 @@ class MistralService:
         self.min_delay = 2
         self.timeout = 20
         self.max_retries = 2
+        self.fallback_attempt = 0
+        self.max_fallback_attempts = 3
 
     def _select_category(self) -> Tuple[str, str]:
         if len(self.used_categories) >= len(QUIZ_CATEGORIES):
@@ -196,7 +198,7 @@ class MistralService:
 
     def get_trivia_question(self, excluded_questions: set) -> Optional[Tuple[str, str, str]]:
         attempts = 0
-        max_attempts = 2
+        max_attempts = 3
         
         while attempts < max_attempts:
             try:
@@ -242,8 +244,21 @@ class MistralService:
                 logger.error(f"Error generating question: {e}")
                 attempts += 1
         
-        logger.info("Falling back to predefined question after all attempts failed")
-        return self._get_fallback_question()
+        # Try to get a fallback question, with its own retry counter
+        self.fallback_attempt += 1
+        if self.fallback_attempt >= self.max_fallback_attempts:
+            logger.error("Maximum fallback attempts reached")
+            return None
+            
+        logger.info(f"Using fallback question (attempt {self.fallback_attempt})")
+        fallback = self._get_fallback_question()
+        
+        # Verify fallback question isn't in excluded set
+        question_hash = f"{fallback[0]}:{fallback[1]}"
+        if question_hash in excluded_questions:
+            return self.get_trivia_question(excluded_questions)
+            
+        return fallback
 
     def _get_fallback_question(self) -> Tuple[str, str, str]:
         fallback_questions = [

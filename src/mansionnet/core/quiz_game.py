@@ -1,6 +1,7 @@
 """Core quiz game logic."""
 import logging
 import threading
+import time
 from datetime import datetime
 from typing import Optional, Callable, Dict, Any
 from collections import defaultdict
@@ -31,6 +32,9 @@ class QuizGame:
         self.irc = IRCService(message_handler=self.handle_message)
         self.question_manager = QuestionManager()
         self.command_handlers = self._init_command_handlers()
+        self.max_question_attempts = 3
+        self.max_main_attempts = 3
+        self.question_check_delay = 2  # seconds to wait between question attempts
 
     def _init_command_handlers(self) -> Dict[str, Callable[[str, str], None]]:
         """Initialize command handlers mapping."""
@@ -72,7 +76,58 @@ class QuizGame:
         # Start first question
         threading.Timer(2.0, self.next_question).start()
         return True
-        
+
+    def try_get_valid_question(self, attempt: int = 1) -> Optional[Question]:
+        """Try to get a valid question, with multiple attempts."""
+        if attempt > self.max_question_attempts:
+            return None
+
+        try:
+            question_data = self.mistral.get_trivia_question(self.state.used_questions)
+            if not question_data:
+                logger.warning(f"Failed to get question data, attempt {attempt} of {self.max_question_attempts}")
+                time.sleep(self.question_check_delay)  # Add delay between attempts
+                return self.try_get_valid_question(attempt + 1)
+
+            # Ensure we got all required question data
+            if len(question_data) != 3:
+                logger.warning(f"Invalid question data format, attempt {attempt}")
+                time.sleep(self.question_check_delay)
+                return self.try_get_valid_question(attempt + 1)
+
+            question = Question(
+                text=question_data[0],
+                primary_answer=question_data[1],
+                alternative_answers=set(),
+                fun_fact=question_data[2],
+                category="general",
+                difficulty=3
+            )
+
+            # Skip if question was recently used
+            question_hash = f"{question.text}:{question.primary_answer}"
+            if question_hash in self.state.used_questions:
+                logger.warning(f"Question was recently used, attempt {attempt}")
+                time.sleep(self.question_check_delay)
+                return self.try_get_valid_question(attempt + 1)
+
+            # Validate question
+            if not self.question_manager.prepare_question({
+                "text": question.text,
+                "answer": question.primary_answer,
+                "fun_fact": question.fun_fact
+            }):
+                logger.warning(f"Question validation failed, attempt {attempt}")
+                time.sleep(self.question_check_delay)
+                return self.try_get_valid_question(attempt + 1)
+
+            return question
+
+        except Exception as e:
+            logger.error(f"Error getting question: {e}")
+            time.sleep(self.question_check_delay)
+            return self.try_get_valid_question(attempt + 1)
+
     def next_question(self) -> None:
         """Progress to the next question."""
         if not self.state.active:
@@ -89,50 +144,46 @@ class QuizGame:
         if self.state.question_number > self.state.total_questions:
             self.end_game()
             return
-            
-        # Get new question
-        question_data = self.mistral.get_trivia_question(self.state.used_questions)
-        if not question_data:
-            logger.error("Failed to get question from Mistral AI")
-            self.end_game()
-            return
-            
-        # Convert to Question object and validate
-        question = Question(
-            text=question_data[0],
-            primary_answer=question_data[1],
-            alternative_answers=set(),  # Will be populated by Mistral service
-            fun_fact=question_data[2],
-            category="general",
-            difficulty=3
-        )
-        
-        if not self.question_manager.prepare_question({"text": question.text, "answer": question.primary_answer, "fun_fact": question.fun_fact}):
-            logger.error("Question failed validation")
-            self.end_game()
-            return
-            
-        # Update state
-        self.state.current_question = question.text
-        self.state.current_answer = question.primary_answer
-        self.state.question_verifications[question.text] = question.fun_fact
-        self.state.used_questions.add(f"{question.text}:{question.primary_answer}")
-        self.state.question_time = datetime.now()
-        
-        # Send question
-        self.irc.send_channel_message(
-            self.state.channel,
-            question.text,
-            question=True,
-            number=self.state.question_number
-        )
-        
-        # Start timer for next question
-        self.state.timer = threading.Timer(
-            self.state.answer_timeout,
-            self.handle_timeout
-        )
-        self.state.timer.start()
+
+        # Try to get a valid question with multiple attempts
+        for main_attempt in range(self.max_main_attempts):
+            try:
+                question = self.try_get_valid_question()
+                if question:
+                    # Update state
+                    self.state.current_question = question.text
+                    self.state.current_answer = question.primary_answer
+                    self.state.question_verifications[question.text] = question.fun_fact
+                    self.state.used_questions.add(f"{question.text}:{question.primary_answer}")
+                    self.state.question_time = datetime.now()
+                    
+                    # Send question
+                    self.irc.send_channel_message(
+                        self.state.channel,
+                        question.text,
+                        question=True,
+                        number=self.state.question_number
+                    )
+                    
+                    # Start timer for next question
+                    self.state.timer = threading.Timer(
+                        self.state.answer_timeout,
+                        self.handle_timeout
+                    )
+                    self.state.timer.start()
+                    return
+
+            except Exception as e:
+                logger.error(f"Error in next_question: {e}, attempt {main_attempt + 1}/{self.max_main_attempts}")
+                if main_attempt == self.max_main_attempts - 1:  # Last attempt
+                    logger.error("All question generation attempts failed")
+                    self.end_game()
+                    return
+                continue
+
+        # If we got here, all attempts failed
+        logger.error("Failed to get valid question after all attempts")
+        self.end_game()
         
     def handle_answer(self, username: str, answer: str) -> None:
         """Process a user's answer attempt."""
