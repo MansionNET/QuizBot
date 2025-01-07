@@ -29,45 +29,51 @@ class IRCService:
         self.server = IRC_CONFIG["server"]
         self.port = IRC_CONFIG["port"]
         self.nickname = IRC_CONFIG["nickname"]
-        self.channels = ["#test_room"]  # Hardcoded for now
+        self.channels = IRC_CONFIG.get("channels", ["#test_room"])
         self.message_handler = message_handler
         self.writer: Optional[StreamWriter] = None
         self.reader: Optional[StreamReader] = None
         self.connected = False
         self.last_pong = time.time()
         self.ping_timeout = 300  # 5 minutes
+        self.message_timeout = 10  # 10 seconds for message sending
+        self.connect_timeout = 30  # 30 seconds for connection
         self.reconnect_delay = 30
         self.lock = asyncio.Lock()
+        self._tasks = set()
         
         # Set up SSL context
         self.ssl_context = ssl.create_default_context()
         self.ssl_context.check_hostname = False
         self.ssl_context.verify_mode = ssl.CERT_NONE
         
+    def _create_tracked_task(self, coro, name=None):
+        """Create and track an asyncio task."""
+        task = asyncio.create_task(coro, name=name)
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
+        return task
+
     async def connect(self) -> bool:
         """Establish connection to the IRC server."""
         try:
             logger.info(f"Connecting to {self.server}:{self.port}...")
             
-            # Connect using asyncio
-            self.reader, self.writer = await asyncio.open_connection(
-                self.server, 
-                self.port,
-                ssl=self.ssl_context
-            )
-            
-            # Send initial commands
-            await self.send(f"NICK {self.nickname}")
-            await self.send(f"USER {self.nickname} 0 * :MansionNet Quiz Bot")
-            
-            # Wait for welcome message
-            buffer = ""
-            while True:
-                try:
-                    line = await asyncio.wait_for(
-                        self.reader.readline(),
-                        timeout=30
-                    )
+            async with asyncio.timeout(self.connect_timeout):
+                # Connect using asyncio
+                self.reader, self.writer = await asyncio.open_connection(
+                    self.server, 
+                    self.port,
+                    ssl=self.ssl_context
+                )
+                
+                # Send initial commands
+                await self.send(f"NICK {self.nickname}")
+                await self.send(f"USER {self.nickname} 0 * :MansionNet Quiz Bot")
+                
+                # Wait for welcome message
+                while True:
+                    line = await self.reader.readline()
                     if not line:
                         return False
                         
@@ -91,11 +97,10 @@ class IRCService:
                     if "ERROR" in buffer or "Closing Link" in buffer:
                         logger.error(f"Server returned error: {buffer}")
                         return False
-                        
-                except asyncio.TimeoutError:
-                    logger.error("Connection timed out waiting for welcome message")
-                    return False
                     
+        except asyncio.TimeoutError:
+            logger.error("Connection attempt timed out")
+            return False
         except Exception as e:
             logger.error(f"Connection error: {e}")
             return False
@@ -105,27 +110,39 @@ class IRCService:
                 await self.writer.wait_closed()
 
     async def send(self, message: str) -> bool:
-        """Send a raw message to the IRC server."""
+        """Send a raw message to the IRC server with timeout."""
         try:
             async with self.lock:
-                if self.writer and not self.writer.is_closing():
-                    self.writer.write(f"{message}\r\n".encode('utf-8'))
-                    await self.writer.drain()
-                    logger.debug(f"Sent: {message}")
-                    return True
-                return False
+                async with asyncio.timeout(self.message_timeout):
+                    if self.writer and not self.writer.is_closing():
+                        self.writer.write(f"{message}\r\n".encode('utf-8'))
+                        await self.writer.drain()
+                        logger.debug(f"Sent: {message}")
+                        return True
+                    return False
+        except asyncio.TimeoutError:
+            logger.error(f"Timeout sending message: {message[:50]}...")
+            return False
         except Exception as e:
             logger.error(f"Error sending message: {e}")
             self.connected = False
             return False
 
     async def send_channel_message(self, channel: str, message: str, **kwargs) -> bool:
-        """Send a formatted message to a channel."""
-        formatted_message = self.format_message(message, **kwargs)
-        success = await self.send(f"PRIVMSG {channel} :{formatted_message}")
-        if success:
-            logger.debug(f"Sent to {channel}: {formatted_message}")
-        return success
+        """Send a formatted message to a channel with timeout."""
+        try:
+            formatted_message = self.format_message(message, **kwargs)
+            async with asyncio.timeout(self.message_timeout):
+                success = await self.send(f"PRIVMSG {channel} :{formatted_message}")
+                if success:
+                    logger.debug(f"Sent to {channel}: {formatted_message}")
+                return success
+        except asyncio.TimeoutError:
+            logger.error(f"Timeout sending channel message to {channel}: {message[:50]}...")
+            return False
+        except Exception as e:
+            logger.error(f"Error sending channel message: {e}")
+            return False
 
     def format_message(self, message: str, **kwargs) -> str:
         """Format a message with IRC color codes and styles."""
@@ -215,50 +232,105 @@ class IRCService:
     async def keep_alive(self) -> None:
         """Keep the connection alive by checking ping responses."""
         while True:
-            await asyncio.sleep(60)  # Check every minute
-            
-            if time.time() - self.last_pong > self.ping_timeout:
-                logger.error("Ping timeout")
+            try:
+                await asyncio.sleep(30)  # Check every 30 seconds
+                
+                if time.time() - self.last_pong > self.ping_timeout:
+                    logger.error("Ping timeout")
+                    self.connected = False
+                    return
+                    
+                if self.connected and self.writer and not self.writer.is_closing():
+                    await self.send(f"PING :{self.server}")
+            except Exception as e:
+                logger.error(f"Error in keep_alive: {e}")
                 self.connected = False
                 return
-                
-            if self.connected and self.writer and not self.writer.is_closing():
-                await self.send(f"PING :{self.server}")
 
     async def run(self) -> None:
         """Main IRC loop."""
         while True:
             try:
                 if not self.connected:
+                    logger.info("Attempting to (re)connect...")
                     if not await self.connect():
                         logger.error("Failed to connect, retrying...")
                         await asyncio.sleep(self.reconnect_delay)
                         continue
                     
                     # Start message processing and keepalive tasks
-                    message_task = asyncio.create_task(self.process_messages())
-                    keepalive_task = asyncio.create_task(self.keep_alive())
-                    
-                    # Wait for either task to complete
-                    done, pending = await asyncio.wait(
-                        [message_task, keepalive_task],
-                        return_when=asyncio.FIRST_COMPLETED
+                    message_task = self._create_tracked_task(
+                        self.process_messages(),
+                        "message_processor"
+                    )
+                    keepalive_task = self._create_tracked_task(
+                        self.keep_alive(),
+                        "keepalive"
                     )
                     
-                    # Cancel remaining tasks
-                    for task in pending:
-                        task.cancel()
-                    
-                    # Clean up
-                    self.connected = False
-                    if self.writer:
-                        self.writer.close()
-                        await self.writer.wait_closed()
+                    try:
+                        # Wait for either task to complete
+                        done, pending = await asyncio.wait(
+                            [message_task, keepalive_task],
+                            return_when=asyncio.FIRST_COMPLETED
+                        )
                         
-                else:
-                    await asyncio.sleep(1)
+                        # Cancel remaining tasks
+                        for task in pending:
+                            task.cancel()
+                            try:
+                                await task
+                            except asyncio.CancelledError:
+                                pass
+                    except Exception as e:
+                        logger.error(f"Error in task handling: {e}")
+                    finally:
+                        # Clean up
+                        self.connected = False
+                        if self.writer:
+                            try:
+                                self.writer.close()
+                                await self.writer.wait_closed()
+                            except Exception as e:
+                                logger.error(f"Error closing writer: {e}")
+                                
+                await asyncio.sleep(1)
                     
             except Exception as e:
                 logger.error(f"Error in main loop: {e}")
                 self.connected = False
                 await asyncio.sleep(self.reconnect_delay)
+
+    async def disconnect(self) -> None:
+        """Gracefully disconnect from the IRC server."""
+        logger.info("Disconnecting from IRC server...")
+        
+        # Cancel all tracked tasks
+        for task in self._tasks:
+            if not task.done():
+                task.cancel()
+        
+        if self._tasks:
+            try:
+                async with asyncio.timeout(5.0):
+                    await asyncio.gather(*self._tasks, return_exceptions=True)
+            except asyncio.TimeoutError:
+                logger.error("Timeout waiting for tasks to cancel")
+        
+        # Send QUIT command if still connected
+        if self.connected and self.writer and not self.writer.is_closing():
+            try:
+                await self.send("QUIT :Bot shutting down")
+            except Exception as e:
+                logger.error(f"Error sending QUIT command: {e}")
+        
+        # Close the writer
+        if self.writer:
+            try:
+                self.writer.close()
+                await self.writer.wait_closed()
+            except Exception as e:
+                logger.error(f"Error closing writer: {e}")
+        
+        self.connected = False
+        logger.info("Disconnected from IRC server")

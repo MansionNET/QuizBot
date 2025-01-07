@@ -4,6 +4,7 @@ import time
 import random
 import logging
 import requests
+import asyncio
 from typing import Dict, Tuple, Optional, Set, List
 from dotenv import load_dotenv
 
@@ -32,15 +33,24 @@ class MistralService:
         self.model = "mistral-medium"
         self.used_categories: List[str] = []
         self.last_api_call = 0
-        self.min_delay = 2
-        self.timeout = 30  # Increased timeout
-        self.max_retries = 3  # Increased retries
+        self.min_delay = 1  # Reduced from 2 to 1
+        self.request_timeout = 15  # Reduced from 30 to 15
+        self.operation_timeout = 25  # Reduced from 45 to 25
+        self.max_retries = 2  # Reduced from 3 to 2
         self.fallback_attempt = 0
         self.max_fallback_attempts = 3
         self.validation_failures = 0
-        self.max_validation_failures = 5
+        self.max_validation_failures = 3  # Reduced from 5 to 3
         self.last_category = None
         self.last_subcategory = None
+        self.session = requests.Session()
+        self.session.mount('https://', requests.adapters.HTTPAdapter(
+            max_retries=requests.adapters.Retry(
+                total=2,  # Reduced from 3
+                backoff_factor=0.5,  # Reduced from 1
+                status_forcelist=[429, 500, 502, 503, 504]
+            )
+        ))
 
     def _select_category(self) -> Tuple[str, str]:
         # Clear used categories if we've used them all
@@ -115,11 +125,59 @@ class MistralService:
         Alternative Answers: [other acceptable answers, if any]
         Fun Fact: [interesting, verifiable fact about the answer]"""
 
-    def _make_api_request(self, messages: list) -> Optional[Dict]:
+    def _get_fallback_question(self) -> Optional[Tuple[str, str, str]]:
+        """Get a fallback question when API fails."""
+        fallback_questions = [
+            (
+                "Which element is the most abundant in Earth's atmosphere?",
+                "nitrogen",
+                "Nitrogen makes up about 78% of Earth's atmosphere."
+            ),
+            (
+                "Which ancient civilization built the pyramids at Giza?",
+                "egyptian",
+                "The Great Pyramid took around 20 years to build."
+            ),
+            (
+                "Which mountain range separates Europe from Asia?",
+                "ural",
+                "The Ural Mountains extend about 2,500 km from north to south."
+            ),
+            (
+                "Who painted the Mona Lisa?",
+                "da vinci",
+                "The Mona Lisa was painted in the early 16th century."
+            ),
+            (
+                "Which instrument has 88 keys?",
+                "piano",
+                "The modern piano was invented by Bartolomeo Cristofori around 1700."
+            ),
+            (
+                "What is the hardest natural substance?",
+                "diamond",
+                "Diamonds are formed under high temperature and pressure deep within the Earth."
+            ),
+            (
+                "Which planet is known as the Red Planet?",
+                "mars",
+                "Mars gets its red color from iron oxide (rust) on its surface."
+            )
+        ]
+        
+        # Reset validation failures counter
+        self.validation_failures = 0
+        self.fallback_attempt = 0
+        
+        question = random.choice(fallback_questions)
+        return question
+
+    async def _make_api_request(self, messages: list) -> Optional[Dict]:
+        """Make API request with timeout and retry handling."""
         current_time = time.time()
         time_since_last_call = current_time - self.last_api_call
         if time_since_last_call < self.min_delay:
-            time.sleep(self.min_delay - time_since_last_call + random.uniform(0, 1))
+            await asyncio.sleep(self.min_delay - time_since_last_call + random.uniform(0, 0.5))
 
         retries = 0
         while retries <= self.max_retries:
@@ -139,55 +197,34 @@ class MistralService:
                     "max_tokens": 300
                 }
                 
-                # Use a session for better connection handling
-                with requests.Session() as session:
-                    session.mount('https://', requests.adapters.HTTPAdapter(
-                        max_retries=requests.adapters.Retry(
-                            total=3,
-                            backoff_factor=1,
-                            status_forcelist=[429, 500, 502, 503, 504]
+                async with asyncio.timeout(self.request_timeout):
+                    loop = asyncio.get_event_loop()
+                    response = await loop.run_in_executor(
+                        None,
+                        lambda: self.session.post(
+                            f"{self.base_url}/chat/completions",
+                            headers=headers,
+                            json=data,
+                            timeout=(3, self.request_timeout - 3)  # (connect timeout, read timeout)
                         )
-                    ))
-                    
-                    response = session.post(
-                        f"{self.base_url}/chat/completions",
-                        headers=headers,
-                        json=data,
-                        timeout=(5, self.timeout)  # (connect timeout, read timeout)
                     )
                 
                 response.raise_for_status()
                 return response.json()
                 
-            except requests.exceptions.Timeout:
-                delay = (2 ** retries) * 2 + random.uniform(0, 1)  # Exponential backoff
-                logger.warning(f"API timeout (attempt {retries + 1}/{self.max_retries + 1}). Waiting {delay:.1f}s")
+            except asyncio.TimeoutError:
+                logger.warning(f"Request timed out (attempt {retries + 1}/{self.max_retries + 1})")
                 retries += 1
                 if retries <= self.max_retries:
-                    time.sleep(delay)
+                    await asyncio.sleep(1 ** retries + random.uniform(0, 0.5))
                 continue
-                
-            except requests.exceptions.ConnectionError as e:
-                logger.error(f"Connection error: {e}")
-                delay = (2 ** retries) * 2 + random.uniform(0, 1)
-                retries += 1
-                if retries <= self.max_retries:
-                    time.sleep(delay)
-                continue
-                
-            except requests.exceptions.HTTPError as e:
-                if e.response.status_code == 429:  # Rate limit
-                    delay = 5 + random.uniform(0, 2)  # Base 5s delay + jitter
-                    logger.warning(f"Rate limited. Waiting {delay:.1f}s")
-                    time.sleep(delay)
-                    retries += 1
-                    continue
-                logger.error(f"HTTP error: {e}")
-                return None
                 
             except requests.exceptions.RequestException as e:
-                logger.error(f"API request failed: {e}")
-                return None
+                logger.error(f"Request failed: {e}")
+                retries += 1
+                if retries <= self.max_retries:
+                    await asyncio.sleep(1 ** retries + random.uniform(0, 0.5))
+                continue
 
         logger.error("All API retry attempts failed")
         return None
@@ -273,94 +310,71 @@ class MistralService:
         self.validation_failures = 0
         return True
 
-    def get_trivia_question(self, excluded_questions: set) -> Optional[Tuple[str, str, str]]:
-        if self.validation_failures >= self.max_validation_failures:
-            logger.warning("Maximum validation failures reached, using fallback")
+    async def get_trivia_question(self, excluded_questions: set) -> Optional[Tuple[str, str, str]]:
+        """Get a trivia question with timeout handling."""
+        try:
+            async with asyncio.timeout(self.operation_timeout):
+                if self.validation_failures >= self.max_validation_failures:
+                    logger.warning("Maximum validation failures reached, using fallback")
+                    return self._get_fallback_question()
+
+                try:
+                    difficulty_weights = {
+                        'easy': 0.6,
+                        'medium': 0.3,
+                        'hard': 0.1
+                    }
+                    
+                    difficulty = random.choices(
+                        list(difficulty_weights.keys()),
+                        weights=list(difficulty_weights.values())
+                    )[0]
+                    
+                    category, subcategory = self._select_category()
+                    prompt = self._generate_prompt(category, subcategory, difficulty)
+                    
+                    response = await self._make_api_request([{
+                        "role": "user",
+                        "content": prompt
+                    }])
+                    
+                    if not response or 'choices' not in response:
+                        self.validation_failures += 1
+                        logger.warning("Failed to get valid response from API")
+                        return await self.get_trivia_question(excluded_questions)
+                    
+                    question, answer, alt_answers, fun_fact = self._parse_response(
+                        response['choices'][0]['message']['content']
+                    )
+                    
+                    if not all([question, answer, fun_fact]):
+                        self.validation_failures += 1
+                        logger.warning("Incomplete question data")
+                        return await self.get_trivia_question(excluded_questions)
+                    
+                    if not self._is_valid_question(question, answer, alt_answers):
+                        self.validation_failures += 1
+                        return await self.get_trivia_question(excluded_questions)
+                    
+                    question_hash = f"{question}:{answer}"
+                    if question_hash in excluded_questions:
+                        logger.debug("Question was recently used")
+                        return await self.get_trivia_question(excluded_questions)
+
+                    return question, answer, fun_fact
+                        
+                except Exception as e:
+                    logger.error(f"Error generating question: {e}")
+                    self.validation_failures += 1
+                    return await self.get_trivia_question(excluded_questions)
+
+        except asyncio.TimeoutError:
+            logger.error("Operation timed out while getting trivia question")
+            return self._get_fallback_question()
+        except Exception as e:
+            logger.error(f"Error in get_trivia_question: {e}")
             return self._get_fallback_question()
 
-        try:
-            difficulty_weights = {
-                'easy': 0.6,
-                'medium': 0.3,
-                'hard': 0.1
-            }
-            
-            difficulty = random.choices(
-                list(difficulty_weights.keys()),
-                weights=list(difficulty_weights.values())
-            )[0]
-            
-            # Generate and validate question
-            category, subcategory = self._select_category()
-            prompt = self._generate_prompt(category, subcategory, difficulty)
-            
-            response = self._make_api_request([{
-                "role": "user",
-                "content": prompt
-            }])
-            
-            if not response or 'choices' not in response:
-                self.validation_failures += 1
-                logger.warning("Failed to get valid response from API")
-                return self.get_trivia_question(excluded_questions)
-            
-            question, answer, alt_answers, fun_fact = self._parse_response(
-                response['choices'][0]['message']['content']
-            )
-            
-            if not all([question, answer, fun_fact]):
-                self.validation_failures += 1
-                logger.warning("Incomplete question data")
-                return self.get_trivia_question(excluded_questions)
-            
-            if not self._is_valid_question(question, answer, alt_answers):
-                self.validation_failures += 1
-                return self.get_trivia_question(excluded_questions)
-            
-            question_hash = f"{question}:{answer}"
-            if question_hash in excluded_questions:
-                logger.debug("Question was recently used")
-                return self.get_trivia_question(excluded_questions)
-
-            return question, answer, fun_fact
-                
-        except Exception as e:
-            logger.error(f"Error generating question: {e}")
-            self.validation_failures += 1
-            return self.get_trivia_question(excluded_questions)
-
-    def _get_fallback_question(self) -> Optional[Tuple[str, str, str]]:
-        fallback_questions = [
-            (
-                "Which element is the most abundant in Earth's atmosphere?",
-                "nitrogen",
-                "Nitrogen makes up about 78% of Earth's atmosphere."
-            ),
-            (
-                "Which ancient civilization built the pyramids at Giza?",
-                "egyptian",
-                "The Great Pyramid took around 20 years to build."
-            ),
-            (
-                "Which mountain range separates Europe from Asia?",
-                "ural",
-                "The Ural Mountains extend about 2,500 km from north to south."
-            ),
-            (
-                "Who painted the Mona Lisa?",
-                "da vinci",
-                "The Mona Lisa was painted in the early 16th century."
-            ),
-            (
-                "Which instrument has 88 keys?",
-                "piano",
-                "The modern piano was invented by Bartolomeo Cristofori around 1700."
-            )
-        ]
-        
-        # Reset validation failures counter
-        self.validation_failures = 0
-        self.fallback_attempt = 0
-        
-        question = random.choice(fallback_questions)
-        return question
+    async def close(self):
+        """Close the session."""
+        await asyncio.get_event_loop().run_in_executor(None, self.session.close)
