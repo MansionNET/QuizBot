@@ -6,12 +6,13 @@ import logging
 import requests
 import asyncio
 from typing import Dict, Tuple, Optional, Set, List
+from datetime import datetime, timedelta
+from collections import deque
 from dotenv import load_dotenv
 
 from ..config.settings import (
     QUIZ_CATEGORIES, 
-    COMPLEX_TERMS, 
-    AMBIGUOUS_TERMS,
+    VALIDATION_CONFIG,
     ALTERNATIVE_ANSWERS
 )
 from ..utils.question_validation import (
@@ -22,35 +23,100 @@ from ..utils.question_validation import (
 
 logger = logging.getLogger(__name__)
 
+class RateLimiter:
+    """Token bucket rate limiter with request tracking."""
+    def __init__(self, rate_limit: int, time_window: int = 60):
+        self.rate_limit = rate_limit
+        self.time_window = time_window
+        self.tokens = rate_limit
+        self.last_update = datetime.now()
+        self.requests = deque(maxlen=rate_limit)
+        self.lock = asyncio.Lock()
+
+    async def acquire(self) -> float:
+        """Acquire a token. Returns delay needed before making request."""
+        async with self.lock:
+            now = datetime.now()
+            
+            # Remove old requests
+            while self.requests and (now - self.requests[0]) > timedelta(seconds=self.time_window):
+                self.requests.popleft()
+            
+            # Calculate tokens to restore
+            elapsed = (now - self.last_update).total_seconds()
+            self.tokens = min(
+                self.rate_limit,
+                self.tokens + (elapsed * self.rate_limit / self.time_window)
+            )
+            self.last_update = now
+
+            if self.tokens < 1:
+                # Calculate delay needed
+                next_token_time = self.requests[0] + timedelta(seconds=self.time_window)
+                delay = (next_token_time - now).total_seconds()
+                return max(0, delay)
+
+            self.tokens -= 1
+            self.requests.append(now)
+            return 0
+
 class MistralService:
     def __init__(self):
         load_dotenv()
         api_key = os.getenv("MISTRAL_API_KEY")
         if not api_key:
             raise ValueError("MISTRAL_API_KEY not found in environment variables")
+            
         self.api_key = api_key
         self.base_url = "https://api.mistral.ai/v1"
         self.model = "mistral-medium"
+        
+        # Rate limiting settings
+        self.rate_limiter = RateLimiter(rate_limit=30)  # 30 requests per minute
+        self.base_retry_delay = 1.0
+        self.max_retry_delay = 32.0
+        self.jitter_factor = 0.1
+        
+        # Timeouts and retries
+        self.request_timeout = 15
+        self.operation_timeout = 25
+        self.max_retries = 3
+        
+        # Question management
         self.used_categories: List[str] = []
-        self.last_api_call = 0
-        self.min_delay = 1  # Reduced from 2 to 1
-        self.request_timeout = 15  # Reduced from 30 to 15
-        self.operation_timeout = 25  # Reduced from 45 to 25
-        self.max_retries = 2  # Reduced from 3 to 2
-        self.fallback_attempt = 0
-        self.max_fallback_attempts = 3
         self.validation_failures = 0
-        self.max_validation_failures = 3  # Reduced from 5 to 3
+        self.max_validation_failures = 3
         self.last_category = None
         self.last_subcategory = None
-        self.session = requests.Session()
-        self.session.mount('https://', requests.adapters.HTTPAdapter(
-            max_retries=requests.adapters.Retry(
-                total=2,  # Reduced from 3
-                backoff_factor=0.5,  # Reduced from 1
-                status_forcelist=[429, 500, 502, 503, 504]
-            )
-        ))
+        
+        # Session configuration
+        self.session = self._setup_session()
+        
+        # Cache for successful questions
+        self.question_cache = deque(maxlen=50)  # Cache last 50 successful questions
+        
+    def _setup_session(self) -> requests.Session:
+        """Configure requests session with proper retry handling."""
+        session = requests.Session()
+        retry_strategy = requests.adapters.Retry(
+            total=3,
+            backoff_factor=2,
+            status_forcelist=[429, 500, 502, 503, 504],
+            allowed_methods=["POST"],
+            respect_retry_after_header=True
+        )
+        adapter = requests.adapters.HTTPAdapter(max_retries=retry_strategy)
+        session.mount("https://", adapter)
+        return session
+
+    async def _exponential_backoff(self, attempt: int) -> float:
+        """Calculate backoff time with jitter."""
+        delay = min(
+            self.max_retry_delay,
+            self.base_retry_delay * (2 ** attempt)
+        )
+        jitter = delay * self.jitter_factor * random.uniform(-1, 1)
+        return delay + jitter
 
     def _select_category(self) -> Tuple[str, str]:
         # Clear used categories if we've used them all
@@ -167,24 +233,26 @@ class MistralService:
         
         # Reset validation failures counter
         self.validation_failures = 0
-        self.fallback_attempt = 0
         
-        question = random.choice(fallback_questions)
-        return question
+        # Try to get a question from cache first
+        if self.question_cache:
+            return random.choice(list(self.question_cache))
+        
+        return random.choice(fallback_questions)
 
     async def _make_api_request(self, messages: list) -> Optional[Dict]:
-        """Make API request with timeout and retry handling."""
-        current_time = time.time()
-        time_since_last_call = current_time - self.last_api_call
-        if time_since_last_call < self.min_delay:
-            await asyncio.sleep(self.min_delay - time_since_last_call + random.uniform(0, 0.5))
-
+        """Make API request with rate limiting and backoff."""
         retries = 0
+        
         while retries <= self.max_retries:
             try:
-                logger.debug(f"Making API request (attempt {retries + 1}/{self.max_retries + 1})")
-                self.last_api_call = time.time()
+                # Wait for rate limit token
+                delay = await self.rate_limiter.acquire()
+                if delay > 0:
+                    await asyncio.sleep(delay)
 
+                logger.debug(f"Making API request (attempt {retries + 1}/{self.max_retries + 1})")
+                
                 headers = {
                     "Authorization": f"Bearer {self.api_key}",
                     "Content-Type": "application/json"
@@ -198,33 +266,39 @@ class MistralService:
                 }
                 
                 async with asyncio.timeout(self.request_timeout):
-                    loop = asyncio.get_event_loop()
-                    response = await loop.run_in_executor(
+                    response = await asyncio.get_event_loop().run_in_executor(
                         None,
                         lambda: self.session.post(
                             f"{self.base_url}/chat/completions",
                             headers=headers,
                             json=data,
-                            timeout=(3, self.request_timeout - 3)  # (connect timeout, read timeout)
+                            timeout=(3, self.request_timeout - 3)
                         )
                     )
                 
+                if response.status_code == 429:
+                    retry_after = int(response.headers.get('Retry-After', 0))
+                    await asyncio.sleep(max(retry_after, await self._exponential_backoff(retries)))
+                    retries += 1
+                    continue
+                    
                 response.raise_for_status()
                 return response.json()
                 
             except asyncio.TimeoutError:
                 logger.warning(f"Request timed out (attempt {retries + 1}/{self.max_retries + 1})")
+                await asyncio.sleep(await self._exponential_backoff(retries))
                 retries += 1
-                if retries <= self.max_retries:
-                    await asyncio.sleep(1 ** retries + random.uniform(0, 0.5))
-                continue
                 
             except requests.exceptions.RequestException as e:
                 logger.error(f"Request failed: {e}")
+                if retries < self.max_retries:
+                    await asyncio.sleep(await self._exponential_backoff(retries))
                 retries += 1
-                if retries <= self.max_retries:
-                    await asyncio.sleep(1 ** retries + random.uniform(0, 0.5))
-                continue
+                
+            except Exception as e:
+                logger.error(f"Unexpected error in API request: {e}")
+                break
 
         logger.error("All API retry attempts failed")
         return None
@@ -275,11 +349,11 @@ class MistralService:
             return False
 
         # Check for problematic terms
-        if any(term in question_lower for term in COMPLEX_TERMS):
+        if any(term in question_lower for term in VALIDATION_CONFIG['complex_terms']):
             logger.debug("Question rejected: Contains complex terms")
             return False
 
-        if any(term in question_lower for term in AMBIGUOUS_TERMS):
+        if any(term in question_lower for term in VALIDATION_CONFIG['ambiguous_terms']):
             logger.debug("Question rejected: Contains ambiguous terms")
             return False
 
@@ -297,13 +371,21 @@ class MistralService:
             logger.debug("Question rejected: No question mark")
             return False
 
-        # Additional validation
-        if len(question.split()) > 15:
-            logger.debug("Question rejected: Too long")
+        # Check question length against config
+        min_length = VALIDATION_CONFIG.get('min_question_length', 20)
+        max_length = VALIDATION_CONFIG.get('max_question_length', 200)
+        
+        if len(question) > max_length:
+            logger.debug("Question rejected: Question length outside acceptable range")
             return False
 
-        if len(question) < 10:
-            logger.debug("Question rejected: Too short")
+        if len(question) < min_length:
+            logger.debug("Question rejected: Question length outside acceptable range")
+            return False
+            
+        # Check for banned characters
+        if any(char in question for char in VALIDATION_CONFIG.get('banned_characters', [])):
+            logger.debug("Question rejected: Contains banned characters")
             return False
             
         # Reset validation failures counter on success
@@ -311,62 +393,25 @@ class MistralService:
         return True
 
     async def get_trivia_question(self, excluded_questions: set) -> Optional[Tuple[str, str, str]]:
-        """Get a trivia question with timeout handling."""
+        """Get a trivia question with improved caching and fallback."""
         try:
+            # Check cache first
+            if self.question_cache and random.random() < 0.3:  # 30% chance to use cached question
+                cached_question = random.choice(list(self.question_cache))
+                if f"{cached_question[0]}:{cached_question[1]}" not in excluded_questions:
+                    return cached_question
+
             async with asyncio.timeout(self.operation_timeout):
                 if self.validation_failures >= self.max_validation_failures:
                     logger.warning("Maximum validation failures reached, using fallback")
                     return self._get_fallback_question()
 
-                try:
-                    difficulty_weights = {
-                        'easy': 0.6,
-                        'medium': 0.3,
-                        'hard': 0.1
-                    }
+                question_data = await self._get_api_question(excluded_questions)
+                if question_data:
+                    self.question_cache.append(question_data)
+                    return question_data
                     
-                    difficulty = random.choices(
-                        list(difficulty_weights.keys()),
-                        weights=list(difficulty_weights.values())
-                    )[0]
-                    
-                    category, subcategory = self._select_category()
-                    prompt = self._generate_prompt(category, subcategory, difficulty)
-                    
-                    response = await self._make_api_request([{
-                        "role": "user",
-                        "content": prompt
-                    }])
-                    
-                    if not response or 'choices' not in response:
-                        self.validation_failures += 1
-                        logger.warning("Failed to get valid response from API")
-                        return await self.get_trivia_question(excluded_questions)
-                    
-                    question, answer, alt_answers, fun_fact = self._parse_response(
-                        response['choices'][0]['message']['content']
-                    )
-                    
-                    if not all([question, answer, fun_fact]):
-                        self.validation_failures += 1
-                        logger.warning("Incomplete question data")
-                        return await self.get_trivia_question(excluded_questions)
-                    
-                    if not self._is_valid_question(question, answer, alt_answers):
-                        self.validation_failures += 1
-                        return await self.get_trivia_question(excluded_questions)
-                    
-                    question_hash = f"{question}:{answer}"
-                    if question_hash in excluded_questions:
-                        logger.debug("Question was recently used")
-                        return await self.get_trivia_question(excluded_questions)
-
-                    return question, answer, fun_fact
-                        
-                except Exception as e:
-                    logger.error(f"Error generating question: {e}")
-                    self.validation_failures += 1
-                    return await self.get_trivia_question(excluded_questions)
+                return self._get_fallback_question()
 
         except asyncio.TimeoutError:
             logger.error("Operation timed out while getting trivia question")
@@ -375,6 +420,49 @@ class MistralService:
             logger.error(f"Error in get_trivia_question: {e}")
             return self._get_fallback_question()
 
+    async def _get_api_question(self, excluded_questions: set) -> Optional[Tuple[str, str, str]]:
+        """Get a question from the API with proper error handling."""
+        try:
+            category, subcategory = self._select_category()
+            difficulty = random.choices(
+                ['easy', 'medium', 'hard'],
+                weights=[0.6, 0.3, 0.1]
+            )[0]
+            
+            prompt = self._generate_prompt(category, subcategory, difficulty)
+            response = await self._make_api_request([{
+                "role": "user",
+                "content": prompt
+            }])
+            
+            if not response or 'choices' not in response:
+                self.validation_failures += 1
+                return None
+                
+            question, answer, alt_answers, fun_fact = self._parse_response(
+                response['choices'][0]['message']['content']
+            )
+            
+            if not all([question, answer, fun_fact]):
+                self.validation_failures += 1
+                return None
+                
+            if not self._is_valid_question(question, answer, alt_answers):
+                self.validation_failures += 1
+                return None
+                
+            question_hash = f"{question}:{answer}"
+            if question_hash in excluded_questions:
+                return None
+
+            return question, answer, fun_fact
+            
+        except Exception as e:
+            logger.error(f"Error generating API question: {e}")
+            self.validation_failures += 1
+            return None
+
     async def close(self):
-        """Close the session."""
-        await asyncio.get_event_loop().run_in_executor(None, self.session.close)
+        """Clean up resources."""
+        if self.session:
+            await asyncio.get_event_loop().run_in_executor(None, self.session.close)

@@ -1,7 +1,7 @@
 """Utilities for validating quiz questions."""
 import re
 from typing import Tuple, Dict, Set
-from ..config.settings import AMBIGUOUS_TERMS, COMPLEX_TERMS, ALTERNATIVE_ANSWERS
+from ..config.settings import VALIDATION_CONFIG, ALTERNATIVE_ANSWERS
 
 def clean_question_text(text: str) -> str:
     """Clean and normalize question text."""
@@ -59,11 +59,16 @@ def has_clear_context(question: str) -> bool:
 def validate_question_content(
     question: str,
     answer: str,
-    min_question_length: int = 3,
-    max_question_length: int = 15,
-    max_answer_words: int = 3
+    min_question_length: int = None,
+    max_question_length: int = None,
+    max_answer_words: int = None
 ) -> Tuple[bool, str]:
     """Validate question and answer content."""
+    # Get validation parameters from config
+    min_question_length = min_question_length or VALIDATION_CONFIG.get('min_question_length', 3)
+    max_question_length = max_question_length or VALIDATION_CONFIG.get('max_question_length', 15)
+    max_answer_words = max_answer_words or VALIDATION_CONFIG.get('max_answer_words', 3)
+    
     # Check question length
     if not is_valid_length(question, min_question_length, max_question_length):
         return False, "Question length outside acceptable range"
@@ -73,12 +78,16 @@ def validate_question_content(
         return False, "Answer too long"
     
     # Check for ambiguous terms
-    if contains_prohibited_terms(question, AMBIGUOUS_TERMS):
+    if contains_prohibited_terms(question, VALIDATION_CONFIG['ambiguous_terms']):
         return False, "Question contains ambiguous terms"
     
     # Check for complex terms
-    if contains_prohibited_terms(question, COMPLEX_TERMS):
+    if contains_prohibited_terms(question, VALIDATION_CONFIG['complex_terms']):
         return False, "Question contains complex terms"
+    
+    # Check for banned characters
+    if any(char in question for char in VALIDATION_CONFIG.get('banned_characters', [])):
+        return False, "Question contains banned characters"
     
     # Check for specific enough question
     if not is_specific_enough(question):

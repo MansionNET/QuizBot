@@ -1,18 +1,22 @@
 """Database models and connection management."""
-from contextlib import contextmanager
-import sqlite3
-from pathlib import Path
-from typing import Generator, Optional, List, Dict, Any
 import logging
 import asyncio
-from functools import partial
+import aiosqlite
+from datetime import datetime
+from pathlib import Path
+from typing import Optional, List, Dict, Any, Set
+from contextlib import asynccontextmanager
 
 from ..config.settings import DB_CONFIG
 
 logger = logging.getLogger(__name__)
 
+class DatabaseError(Exception):
+    """Custom exception for database operations."""
+    pass
+
 class Database:
-    """Database connection and schema management."""
+    """Database connection and schema management with connection pooling."""
     
     SCHEMA = {
         "scores": """
@@ -24,7 +28,8 @@ class Database:
                 fastest_answer REAL DEFAULT 0,
                 longest_streak INTEGER DEFAULT 0,
                 highest_score INTEGER DEFAULT 0,
-                last_played TIMESTAMP
+                last_played TIMESTAMP,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """,
         "question_history": """
@@ -36,62 +41,104 @@ class Database:
                 times_asked INTEGER DEFAULT 1,
                 times_answered_correctly INTEGER DEFAULT 0,
                 last_asked TIMESTAMP,
-                average_answer_time REAL DEFAULT 0
+                average_answer_time REAL DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """
     }
 
     def __init__(self, db_path: Optional[Path] = None):
-        """Initialize database connection."""
+        """Initialize database with connection pool settings."""
         self.db_path = db_path or DB_CONFIG["path"]
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        self._active_connections = set()
-        self.operation_timeout = 10  # 10 second timeout for DB operations
-        self.init_schema()
+        
+        # Connection pool settings
+        self.pool = None
+        self.pool_lock = asyncio.Lock()
+        self.max_connections = DB_CONFIG.get("max_connections", 10)
+        self.min_connections = DB_CONFIG.get("min_connections", 1)
+        self.max_retries = DB_CONFIG.get("max_retries", 3)
+        self.retry_delay = DB_CONFIG.get("retry_delay", 1)
+        self.operation_timeout = DB_CONFIG.get("operation_timeout", 10)
+        
+        # Track active connections
+        self._active_connections: Set[aiosqlite.Connection] = set()
+        self._stopping = False
 
-    async def _execute_with_timeout(self, operation, *args, **kwargs):
+    async def initialize(self) -> None:
+        """Initialize the database schema and connection pool."""
+        try:
+            async with self.get_connection() as conn:
+                for table_name, schema in self.SCHEMA.items():
+                    try:
+                        await conn.execute(schema)
+                        await conn.commit()
+                    except Exception as e:
+                        raise DatabaseError(f"Error creating table {table_name}: {e}")
+        except Exception as e:
+            logger.error(f"Database initialization failed: {e}")
+            raise
+
+    @asynccontextmanager
+    async def get_connection(self):
+        """
+        Get a database connection from the pool.
+        Implements retry logic and connection pooling.
+        """
+        retry_count = 0
+        conn = None
+        
+        while retry_count < self.max_retries:
+            try:
+                async with self.pool_lock:
+                    if self._stopping:
+                        raise DatabaseError("Database is shutting down")
+                        
+                    if not self.pool:
+                        self.pool = await aiosqlite.connect(
+                            self.db_path,
+                            isolation_level=None,  # Enable autocommit mode
+                        )
+                    conn = self.pool
+                    
+                self._active_connections.add(conn)
+                yield conn
+                break
+                
+            except Exception as e:
+                retry_count += 1
+                if retry_count == self.max_retries:
+                    raise DatabaseError(f"Failed to get database connection: {e}")
+                await asyncio.sleep(self.retry_delay)
+                
+            finally:
+                if conn:
+                    self._active_connections.discard(conn)
+
+    async def execute_with_timeout(self, operation):
         """Execute a database operation with timeout."""
         try:
             async with asyncio.timeout(self.operation_timeout):
-                return await asyncio.get_event_loop().run_in_executor(
-                    None, operation, *args, **kwargs
-                )
+                return await operation
         except asyncio.TimeoutError:
-            logger.error(f"Database operation timed out: {operation.__name__}")
-            raise
+            raise DatabaseError(f"Operation timed out after {self.operation_timeout} seconds")
         except Exception as e:
-            logger.error(f"Database operation failed: {e}")
-            raise
+            raise DatabaseError(f"Database operation failed: {e}")
 
-    @contextmanager
-    def get_connection(self) -> Generator[sqlite3.Connection, None, None]:
-        """Create a database connection context."""
-        conn = sqlite3.connect(self.db_path)
-        self._active_connections.add(conn)
-        try:
-            yield conn
-        finally:
-            self._active_connections.remove(conn)
-            conn.close()
-
-    def init_schema(self) -> None:
-        """Initialize database schema."""
-        with self.get_connection() as conn:
-            cursor = conn.cursor()
-            for table_name, schema in self.SCHEMA.items():
-                try:
-                    cursor.execute(schema)
-                except sqlite3.Error as e:
-                    logger.error(f"Error creating table {table_name}: {e}")
-            conn.commit()
-
-    async def update_score(self, username: str, points: int, answer_time: float,
-                          current_streak: int) -> None:
-        """Update user score and statistics with timeout."""
-        def _update():
-            with self.get_connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute("""
+    async def update_score(
+        self,
+        username: str,
+        points: int,
+        answer_time: float,
+        current_streak: int
+    ) -> None:
+        """Update user score and statistics."""
+        if not username or points < 0 or answer_time < 0:
+            raise ValueError("Invalid score update parameters")
+            
+        async with self.get_connection() as conn:
+            try:
+                await self.execute_with_timeout(conn.execute("""
                     INSERT INTO scores (
                         username, total_score, games_played, correct_answers,
                         fastest_answer, longest_streak, highest_score, last_played
@@ -120,92 +167,103 @@ class Database:
                     username, points, answer_time, current_streak, points,
                     points, answer_time, answer_time, current_streak,
                     current_streak, points, points
-                ))
-                conn.commit()
-
-        try:
-            await self._execute_with_timeout(_update)
-        except Exception as e:
-            logger.error(f"Failed to update score for {username}: {e}")
+                )))
+                await conn.commit()
+                
+            except Exception as e:
+                logger.error(f"Failed to update score for {username}: {e}")
+                raise DatabaseError(f"Score update failed: {e}")
 
     async def get_leaderboard(self, limit: int = 5) -> List[Dict[str, Any]]:
-        """Get the top players by score with timeout."""
-        def _get_leaderboard():
-            with self.get_connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute("""
+        """Get the top players by score."""
+        if limit < 1:
+            raise ValueError("Leaderboard limit must be positive")
+            
+        async with self.get_connection() as conn:
+            try:
+                async with conn.execute("""
                     SELECT
                         username, total_score, correct_answers,
                         fastest_answer, longest_streak, highest_score
                     FROM scores
                     ORDER BY total_score DESC
                     LIMIT ?
-                """, (limit,))
-                columns = [col[0] for col in cursor.description]
-                return [dict(zip(columns, row)) for row in cursor.fetchall()]
-
-        try:
-            return await self._execute_with_timeout(_get_leaderboard)
-        except Exception as e:
-            logger.error(f"Failed to get leaderboard: {e}")
-            return []
+                """, (limit,)) as cursor:
+                    rows = await cursor.fetchall()
+                    columns = [description[0] for description in cursor.description]
+                    return [dict(zip(columns, row)) for row in rows]
+                    
+            except Exception as e:
+                logger.error(f"Failed to get leaderboard: {e}")
+                return []
 
     async def get_player_stats(self, username: str) -> Optional[Dict[str, Any]]:
-        """Get detailed statistics for a player with timeout."""
-        def _get_stats():
-            with self.get_connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute("""
+        """Get detailed statistics for a player."""
+        if not username:
+            raise ValueError("Username cannot be empty")
+            
+        async with self.get_connection() as conn:
+            try:
+                async with conn.execute("""
                     SELECT
                         total_score, games_played, correct_answers,
                         fastest_answer, longest_streak, highest_score
                     FROM scores WHERE username = ?
-                """, (username,))
-                row = cursor.fetchone()
-                if row:
-                    return {
-                        "total_score": row[0],
-                        "games_played": row[1],
-                        "correct_answers": row[2],
-                        "fastest_answer": row[3],
-                        "longest_streak": row[4],
-                        "highest_score": row[5]
-                    }
+                """, (username,)) as cursor:
+                    row = await cursor.fetchone()
+                    
+                    if row:
+                        return {
+                            "total_score": row[0],
+                            "games_played": row[1],
+                            "correct_answers": row[2],
+                            "fastest_answer": row[3],
+                            "longest_streak": row[4],
+                            "highest_score": row[5]
+                        }
+                    return None
+                    
+            except Exception as e:
+                logger.error(f"Failed to get stats for {username}: {e}")
                 return None
 
-        try:
-            return await self._execute_with_timeout(_get_stats)
-        except Exception as e:
-            logger.error(f"Failed to get stats for {username}: {e}")
-            return None
-
-    async def add_question_to_history(self, question: str, answer: str,
-                                    category: str) -> None:
-        """Add a new question to the history with timeout."""
-        def _add_question():
-            question_hash = f"{question}:{answer}"
-            with self.get_connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute("""
+    async def add_question_to_history(
+        self,
+        question: str,
+        answer: str,
+        category: str
+    ) -> None:
+        """Add a new question to the history."""
+        if not question or not answer:
+            raise ValueError("Question and answer are required")
+            
+        question_hash = f"{question}:{answer}"
+        async with self.get_connection() as conn:
+            try:
+                await self.execute_with_timeout(conn.execute("""
                     INSERT INTO question_history
                     (question_hash, question, answer, category, last_asked)
                     VALUES (?, ?, ?, ?, datetime('now'))
-                """, (question_hash, question, answer, category))
-                conn.commit()
+                """, (question_hash, question, answer, category)))
+                await conn.commit()
+                
+            except Exception as e:
+                logger.error(f"Failed to add question to history: {e}")
+                raise DatabaseError(f"Failed to add question: {e}")
 
-        try:
-            await self._execute_with_timeout(_add_question)
-        except Exception as e:
-            logger.error(f"Failed to add question to history: {e}")
-
-    async def update_question_stats(self, question_hash: str,
-                                  answered_correctly: bool,
-                                  answer_time: float) -> None:
-        """Update statistics for a question with timeout."""
-        def _update_stats():
-            with self.get_connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute("""
+    async def update_question_stats(
+        self,
+        question_hash: str,
+        answered_correctly: bool,
+        answer_time: float
+    ) -> None:
+        """Update statistics for a question."""
+        if not question_hash or answer_time < 0:
+            raise ValueError("Invalid question stats parameters")
+            
+        async with self.get_connection() as conn:
+            try:
+                await self.execute_with_timeout(conn.execute("""
                     UPDATE question_history
                     SET times_asked = times_asked + 1,
                         times_answered_correctly = times_answered_correctly + ?,
@@ -215,33 +273,53 @@ class Database:
                         ),
                         last_asked = datetime('now')
                     WHERE question_hash = ?
-                """, (int(answered_correctly), answer_time, question_hash))
-                conn.commit()
+                """, (int(answered_correctly), answer_time, question_hash)))
+                await conn.commit()
+                
+            except Exception as e:
+                logger.error(f"Failed to update question stats: {e}")
+                raise DatabaseError(f"Failed to update question stats: {e}")
 
-        try:
-            await self._execute_with_timeout(_update_stats)
-        except Exception as e:
-            logger.error(f"Failed to update question stats: {e}")
+    async def cleanup_old_questions(self, days: int = 30) -> int:
+        """Remove questions that haven't been asked in specified days."""
+        async with self.get_connection() as conn:
+            try:
+                async with conn.execute("""
+                    DELETE FROM question_history
+                    WHERE last_asked < datetime('now', ?)
+                """, (f'-{days} days',)) as cursor:
+                    await conn.commit()
+                    return cursor.rowcount
+                    
+            except Exception as e:
+                logger.error(f"Failed to cleanup old questions: {e}")
+                return 0
 
     async def close(self) -> None:
-        """Close all active database connections with timeout."""
+        """Close all database connections."""
+        self._stopping = True
         logger.info("Closing database connections...")
         
-        def _close_connections():
-            for conn in self._active_connections.copy():
-                try:
-                    conn.close()
-                    self._active_connections.remove(conn)
-                except Exception as e:
-                    logger.error(f"Error closing database connection: {e}")
-        
         try:
-            async with asyncio.timeout(5.0):  # 5 second timeout for cleanup
-                await asyncio.get_event_loop().run_in_executor(None, _close_connections)
+            async with asyncio.timeout(5.0):
+                if self.pool:
+                    await self.pool.close()
+                    self.pool = None
+                
+                for conn in self._active_connections.copy():
+                    try:
+                        await conn.close()
+                        self._active_connections.remove(conn)
+                    except Exception as e:
+                        logger.error(f"Error closing database connection: {e}")
+                        
         except asyncio.TimeoutError:
-            logger.error("Timeout while closing database connections")
+            logger.error("Database cleanup timed out")
         except Exception as e:
             logger.error(f"Error during database cleanup: {e}")
-            
-        if self._active_connections:
-            logger.warning(f"{len(self._active_connections)} database connections remain open")
+        finally:
+            if self._active_connections:
+                logger.warning(
+                    f"{len(self._active_connections)} database connections "
+                    "remain open"
+                )
