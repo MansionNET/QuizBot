@@ -135,7 +135,7 @@ CACHE_CONFIG = {
 # Question Validation
 VALIDATION_CONFIG = {
     # Content validation
-    "min_question_length": 20,   # characters
+    "min_question_length": 10,   # characters
     "max_question_length": 200,  # characters
     "max_answer_words": 3,
     "max_fun_fact_length": 150,  # characters

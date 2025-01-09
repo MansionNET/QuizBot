@@ -30,10 +30,10 @@ def normalize_answer(answer: str) -> str:
     
     return answer
 
-def is_valid_length(text: str, min_words: int = 3, max_words: int = 15) -> bool:
+def is_valid_length(text: str, min_chars: int = 10, max_chars: int = 200) -> bool:
     """Check if text length is within acceptable range."""
-    words = text.split()
-    return min_words <= len(words) <= max_words
+    text_length = len(text)
+    return min_chars <= text_length <= max_chars
 
 def contains_prohibited_terms(text: str, terms: Set[str]) -> bool:
     """Check if text contains any prohibited terms."""
@@ -65,12 +65,12 @@ def validate_question_content(
 ) -> Tuple[bool, str]:
     """Validate question and answer content."""
     # Get validation parameters from config
-    min_question_length = min_question_length or VALIDATION_CONFIG.get('min_question_length', 3)
-    max_question_length = max_question_length or VALIDATION_CONFIG.get('max_question_length', 15)
+    min_question_length = min_question_length or VALIDATION_CONFIG.get('min_question_length', 10)
+    max_question_length = max_question_length or VALIDATION_CONFIG.get('max_question_length', 200)
     max_answer_words = max_answer_words or VALIDATION_CONFIG.get('max_answer_words', 3)
     
     # Check question length
-    if not is_valid_length(question, min_question_length, max_question_length):
+    if not is_valid_length(question, min_chars=min_question_length, max_chars=max_question_length):
         return False, "Question length outside acceptable range"
     
     # Check answer length
