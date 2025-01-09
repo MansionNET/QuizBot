@@ -286,80 +286,205 @@ IRC_FORMATTING = {
     }
 }
 
-# Quiz Categories
-QUIZ_CATEGORIES: Dict[str, List[str]] = {
-    "Science": [
-        "Physics & Space",
-        "Biology & Nature",
-        "Chemistry",
-        "Human Body",
-        "Inventions",
-        "Environmental Science",
-        "Computing & Tech"
+# World Regions for Question Diversity
+WORLD_REGIONS = {
+    "Africa": [
+        "North Africa",
+        "West Africa",
+        "East Africa",
+        "Central Africa",
+        "Southern Africa"
     ],
-    "History": [
-        "Ancient Civilizations",
-        "Middle Ages",
-        "Renaissance",
-        "World Wars",
-        "American History",
-        "European History",
-        "Asian History",
-        "African History",
-        "Important Discoveries"
+    "Asia": [
+        "East Asia",
+        "Southeast Asia",
+        "South Asia",
+        "Central Asia",
+        "Middle East"
     ],
-    "Geography": [
-        "Countries & Capitals",
-        "Mountains & Rivers",
-        "Oceans & Seas",
-        "Famous Landmarks",
-        "Climate & Weather",
-        "Natural Wonders",
-        "World Cities"
+    "Europe": [
+        "Western Europe",
+        "Eastern Europe",
+        "Northern Europe",
+        "Southern Europe",
+        "Central Europe"
     ],
-    "Arts & Culture": [
-        "Classical Music",
-        "Modern Music",
-        "Painting & Sculpture",
-        "Literature & Authors",
-        "Theater & Dance",
-        "Architecture",
-        "Museums & Galleries"
+    "Americas": [
+        "North America",
+        "South America",
+        "Central America",
+        "Caribbean"
     ],
-    "Entertainment": [
-        "Classic Movies",
-        "Modern Films",
-        "Television Shows",
-        "Video Games",
-        "Comics & Animation",
-        "Celebrities",
-        "Awards & Honors"
+    "Oceania": [
+        "Australia",
+        "New Zealand",
+        "Pacific Islands"
     ],
-    "Sports": [
-        "Olympic Sports",
-        "Team Sports",
-        "Individual Sports",
-        "Sports History",
-        "Championships",
-        "Notable Athletes",
-        "Sports Records"
-    ],
-    "Language & Literature": [
-        "Famous Books",
-        "Classic Authors",
-        "Poetry",
-        "World Languages",
-        "Etymology",
-        "Literary Characters",
-        "Mythology"
-    ],
-    "STEM": [
-        "Mathematics",
-        "Computer Science",
-        "Engineering",
-        "Scientific Method",
-        "Famous Scientists",
-        "Technology History",
-        "Discoveries & Breakthroughs"
-    ]
+    "Global": ["International"]
+}
+
+# Regional Distribution Weights
+REGION_WEIGHTS = {
+    "Africa": 0.15,
+    "Asia": 0.2,
+    "Europe": 0.2,
+    "Americas": 0.2,
+    "Oceania": 0.15,
+    "Global": 0.1
+}
+
+# Quiz Categories with Regional Context
+QUIZ_CATEGORIES: Dict[str, Dict[str, List[str]]] = {
+    "Science": {
+        "subcategories": [
+            "Physics & Space",
+            "Biology & Nature",
+            "Chemistry",
+            "Human Body",
+            "Inventions",
+            "Environmental Science",
+            "Computing & Tech"
+        ],
+        "regional_context": True,  # Can have regional variations
+        "regional_examples": {
+            "Asia": "Traditional medicine, Asian space programs",
+            "Africa": "African botanical discoveries, wildlife",
+            "Americas": "NASA, Silicon Valley innovations",
+            "Europe": "CERN, European Space Agency",
+            "Oceania": "Great Barrier Reef research, Australian wildlife"
+        }
+    },
+    "History": {
+        "subcategories": [
+            "Ancient Civilizations",
+            "Middle Ages",
+            "Renaissance",
+            "World Wars",
+            "Important Discoveries",
+            "Cultural Heritage",
+            "Trade & Commerce"
+        ],
+        "regional_context": True,
+        "regional_examples": {
+            "Asia": "Silk Road, Ancient China, Mongol Empire",
+            "Africa": "Great Zimbabwe, Egyptian pyramids, Mali Empire",
+            "Americas": "Aztec, Inca, Maya civilizations",
+            "Europe": "Roman Empire, Medieval period, Renaissance",
+            "Oceania": "Aboriginal history, Polynesian navigation"
+        }
+    },
+    "Geography": {
+        "subcategories": [
+            "Countries & Capitals",
+            "Mountains & Rivers",
+            "Oceans & Seas",
+            "Famous Landmarks",
+            "Climate & Weather",
+            "Natural Wonders",
+            "World Cities"
+        ],
+        "regional_context": True,
+        "regional_examples": {
+            "Asia": "Himalayas, Yangtze River, Great Wall",
+            "Africa": "Sahara Desert, Nile River, Mount Kilimanjaro",
+            "Americas": "Amazon River, Rockies, Andes Mountains",
+            "Europe": "Alps, Mediterranean Sea, Rhine River",
+            "Oceania": "Great Barrier Reef, Uluru, Pacific Islands"
+        }
+    },
+    "Arts & Culture": {
+        "subcategories": [
+            "Music & Dance",
+            "Visual Arts",
+            "Literature",
+            "Theater",
+            "Architecture",
+            "Traditional Crafts",
+            "Cultural Festivals"
+        ],
+        "regional_context": True,
+        "regional_examples": {
+            "Asia": "Kabuki theater, Chinese ceramics, Bollywood",
+            "Africa": "Tribal art, African drums, storytelling",
+            "Americas": "Jazz, Broadway, Native American art",
+            "Europe": "Classical music, Renaissance art, Gothic architecture",
+            "Oceania": "Aboriginal art, Maori culture, Pacific dance"
+        }
+    },
+    "Entertainment": {
+        "subcategories": [
+            "Cinema",
+            "Television",
+            "Video Games",
+            "Animation",
+            "Popular Music",
+            "Digital Media",
+            "Entertainment Industry"
+        ],
+        "regional_context": True,
+        "regional_examples": {
+            "Asia": "K-pop, anime, Bollywood films",
+            "Africa": "Nollywood, African music stars",
+            "Americas": "Hollywood, Broadway, Latin music",
+            "Europe": "Eurovision, British TV shows",
+            "Oceania": "Australian TV, Kiwi films"
+        }
+    },
+    "Sports": {
+        "subcategories": [
+            "Olympic Sports",
+            "Team Sports",
+            "Individual Sports",
+            "Traditional Games",
+            "Championships",
+            "Athletes",
+            "Sports Culture"
+        ],
+        "regional_context": True,
+        "regional_examples": {
+            "Asia": "Cricket in India, Table Tennis in China, Sumo",
+            "Africa": "African football stars, Marathon runners",
+            "Americas": "Baseball, Basketball, American football",
+            "Europe": "Football/Soccer, Tennis, Formula 1",
+            "Oceania": "Rugby, Australian Rules Football, Surfing"
+        }
+    },
+    "Language & Literature": {
+        "subcategories": [
+            "World Literature",
+            "Poetry & Prose",
+            "Languages",
+            "Mythology",
+            "Folk Tales",
+            "Ancient Texts",
+            "Modern Writers"
+        ],
+        "regional_context": True,
+        "regional_examples": {
+            "Asia": "Chinese poetry, Sanskrit literature",
+            "Africa": "African storytelling, oral traditions",
+            "Americas": "Native American myths, Latin literature",
+            "Europe": "Greek mythology, Shakespeare",
+            "Oceania": "Aboriginal dreamtime stories, Maori legends"
+        }
+    },
+    "STEM": {
+        "subcategories": [
+            "Mathematics",
+            "Computer Science",
+            "Engineering",
+            "Scientific Method",
+            "Innovation",
+            "Technology",
+            "Research"
+        ],
+        "regional_context": True,
+        "regional_examples": {
+            "Asia": "Asian tech innovation, mathematical discoveries",
+            "Africa": "African space programs, tech startups",
+            "Americas": "Silicon Valley, NASA achievements",
+            "Europe": "CERN, European space missions",
+            "Oceania": "Australian scientific research"
+        }
+    }
 }

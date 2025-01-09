@@ -11,8 +11,11 @@ from dotenv import load_dotenv
 from ..config.settings import (
     QUIZ_CATEGORIES, 
     VALIDATION_CONFIG,
-    ALTERNATIVE_ANSWERS
+    ALTERNATIVE_ANSWERS,
+    WORLD_REGIONS,
+    REGION_WEIGHTS
 )
+from ..models.database import Database
 from ..utils.question_validation import (
     validate_question_content,
     clean_question_text,
@@ -22,7 +25,7 @@ from ..utils.question_validation import (
 logger = logging.getLogger(__name__)
 
 class MistralService:
-    def __init__(self):
+    def __init__(self, db: Optional[Database] = None):
         load_dotenv()
         api_key = os.getenv("MISTRAL_API_KEY")
         if not api_key:
@@ -31,6 +34,9 @@ class MistralService:
         self.api_key = api_key
         self.base_url = "https://api.mistral.ai/v1"
         self.model = "mistral-tiny"
+        
+        # Database connection
+        self.db = db or Database()
         
         # Simple session setup
         self.session = requests.Session()
@@ -43,6 +49,14 @@ class MistralService:
         # Simple rate limiting
         self.last_request_time = None
         self.min_request_interval = 2.0  # Minimum 2 seconds between requests
+
+    async def initialize(self):
+        """Initialize the service and database."""
+        try:
+            await self.db.initialize()
+        except Exception as e:
+            logger.error(f"Failed to initialize database: {e}")
+            # Continue even if database init fails
 
     def _make_api_request(self, messages: list) -> Optional[Dict]:
         """Make a request to the Mistral AI API."""
@@ -118,6 +132,29 @@ class MistralService:
         
         return True
 
+    async def _get_next_region(self) -> Tuple[str, str]:
+        """Get the next region to focus on based on usage statistics."""
+        try:
+            least_used = await self.db.get_least_used_categories(limit=5)
+            if least_used:
+                # Randomly select from least used to add variety
+                category_info = random.choice(least_used)
+                return category_info['region'], category_info['category']
+        except Exception as e:
+            logger.debug(f"Failed to get least used categories: {e}")
+            # Fall through to default selection
+            
+        # Default or fallback to weighted random selection
+        try:
+            region = random.choices(
+                list(REGION_WEIGHTS.keys()),
+                weights=list(REGION_WEIGHTS.values())
+            )[0]
+            return region, random.choice(list(QUIZ_CATEGORIES.keys()))
+        except Exception as e:
+            logger.error(f"Error selecting region: {e}")
+            return "Global", next(iter(QUIZ_CATEGORIES.keys()))
+
     async def get_trivia_question(self, excluded_questions: set) -> Optional[Tuple[str, str, str]]:
         """Get a trivia question from Mistral AI."""
         max_attempts = 3
@@ -125,25 +162,51 @@ class MistralService:
         
         while attempts < max_attempts:
             try:
-                # Select a category that hasn't been used recently
-                available_categories = [
-                    cat for cat in QUIZ_CATEGORIES.keys()
-                    if cat not in self.recent_categories
-                ]
-                if not available_categories:
-                    available_categories = list(QUIZ_CATEGORIES.keys())
+                # Get region and category based on usage statistics
+                region, category = await self._get_next_region()
                 
-                category = random.choice(available_categories)
-                subcategory = random.choice(QUIZ_CATEGORIES[category])
+                # Get category info with fallback
+                try:
+                    category_info = QUIZ_CATEGORIES[category]
+                    subcategory = random.choice(category_info['subcategories'])
+                except (KeyError, IndexError) as e:
+                    logger.error(f"Error accessing category info: {e}")
+                    attempts += 1
+                    continue
+                
+                # Get regional context if available
+                regional_context = None
+                try:
+                    if category_info.get('regional_context') and category_info.get('regional_examples', {}).get(region):
+                        regional_context = category_info['regional_examples'][region]
+                except Exception as e:
+                    logger.debug(f"Error getting regional context: {e}")
+                    # Continue without regional context
+                
+                # Select difficulty
                 difficulty = random.choices(
                     ['easy', 'medium', 'hard'],
                     weights=[0.6, 0.3, 0.1]
                 )[0]
                 
-                # Generate the prompt
-                prompt = self._generate_prompt(category, subcategory, difficulty)
+                # Get recently used answers to avoid repetition
+                try:
+                    recent_answers = await self.db.get_recently_used_answers(days=15)
+                except Exception as e:
+                    logger.debug(f"Failed to get recent answers: {e}")
+                    recent_answers = []
                 
-                # Make API request (synchronously)
+                # Generate the prompt with regional context
+                prompt = self._generate_prompt(
+                    category, 
+                    subcategory, 
+                    difficulty,
+                    region,
+                    regional_context,
+                    recent_answers
+                )
+                
+                # Make API request
                 response = self._make_api_request([{
                     "role": "user",
                     "content": prompt
@@ -177,6 +240,19 @@ class MistralService:
                 self.recent_questions.append(question)
                 self.recent_categories.append(category)
                 
+                # Try to add to database, but continue even if it fails
+                try:
+                    await self.db.add_question_to_history(
+                        question=question,
+                        answer=answer,
+                        category=category,
+                        subcategory=subcategory,
+                        region=region
+                    )
+                except Exception as e:
+                    logger.error(f"Failed to add question to history: {e}")
+                    # Continue even if database update fails
+                
                 return question, answer, fun_fact
                 
             except Exception as e:
@@ -186,10 +262,28 @@ class MistralService:
         # If all attempts fail, return a fallback question that hasn't been used recently
         return self._get_fallback_question()
 
-    def _generate_prompt(self, category: str, subcategory: str, difficulty: str) -> str:
+    def _generate_prompt(
+        self, 
+        category: str, 
+        subcategory: str, 
+        difficulty: str,
+        region: str,
+        regional_context: Optional[str],
+        recent_answers: List[str]
+    ) -> str:
         """Generate a detailed prompt for the Mistral AI API."""
+        # Build regional context string
+        region_str = f" focusing on {region}" if region != "Global" else ""
+        context_str = f"\nRegional context: {regional_context}" if regional_context else ""
+        
+        # Build avoided answers string
+        avoid_str = ""
+        if recent_answers:
+            avoid_str = "\nAvoid using these answers that were recently used: " + \
+                       ", ".join(recent_answers[:10])  # Limit to 10 for prompt length
+        
         return f"""Generate a {difficulty} trivia question about {subcategory} 
-        (category: {category}) following these STRICT rules:
+        (category: {category}){region_str} following these STRICT rules:{context_str}{avoid_str}
         
         ESSENTIAL REQUIREMENTS:
         1. Question MUST be about ESTABLISHED, VERIFIED facts only
@@ -339,3 +433,5 @@ class MistralService:
         """Clean up resources."""
         if self.session:
             self.session.close()
+        if self.db:
+            await self.db.close()

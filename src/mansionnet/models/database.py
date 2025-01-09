@@ -38,11 +38,32 @@ class Database:
                 question TEXT,
                 answer TEXT,
                 category TEXT,
+                subcategory TEXT,
+                region TEXT,
                 times_asked INTEGER DEFAULT 1,
                 times_answered_correctly INTEGER DEFAULT 0,
                 last_asked TIMESTAMP,
                 average_answer_time REAL DEFAULT 0,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """,
+        "answer_tracking": """
+            CREATE TABLE IF NOT EXISTS answer_tracking (
+                answer TEXT PRIMARY KEY,
+                category TEXT,
+                times_used INTEGER DEFAULT 1,
+                last_used TIMESTAMP,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """,
+        "category_tracking": """
+            CREATE TABLE IF NOT EXISTS category_tracking (
+                category TEXT,
+                subcategory TEXT,
+                region TEXT,
+                times_used INTEGER DEFAULT 1,
+                last_used TIMESTAMP,
+                PRIMARY KEY (category, subcategory, region)
             )
         """
     }
@@ -69,6 +90,17 @@ class Database:
         """Initialize the database schema and connection pool."""
         try:
             async with self.get_connection() as conn:
+                # Drop existing tables to ensure clean schema
+                drop_tables = [
+                    "DROP TABLE IF EXISTS question_history",
+                    "DROP TABLE IF EXISTS answer_tracking",
+                    "DROP TABLE IF EXISTS category_tracking"
+                ]
+                for drop_sql in drop_tables:
+                    await conn.execute(drop_sql)
+                    await conn.commit()
+                
+                # Create tables with new schema
                 for table_name, schema in self.SCHEMA.items():
                     try:
                         await conn.execute(schema)
@@ -231,25 +263,116 @@ class Database:
         self,
         question: str,
         answer: str,
-        category: str
+        category: str,
+        subcategory: str,
+        region: str = "global"
     ) -> None:
-        """Add a new question to the history."""
+        """Add a new question to the history and update tracking tables."""
         if not question or not answer:
             raise ValueError("Question and answer are required")
             
         question_hash = f"{question}:{answer}"
         async with self.get_connection() as conn:
             try:
+                # Add to question history
                 await self.execute_with_timeout(conn.execute("""
                     INSERT INTO question_history
-                    (question_hash, question, answer, category, last_asked)
-                    VALUES (?, ?, ?, ?, datetime('now'))
-                """, (question_hash, question, answer, category)))
+                    (question_hash, question, answer, category, subcategory, region, last_asked)
+                    VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
+                """, (question_hash, question, answer, category, subcategory, region)))
+                
+                # Update answer tracking
+                await self.execute_with_timeout(conn.execute("""
+                    INSERT INTO answer_tracking (answer, category, last_used)
+                    VALUES (?, ?, datetime('now'))
+                    ON CONFLICT(answer) DO UPDATE SET
+                        times_used = times_used + 1,
+                        last_used = datetime('now')
+                """, (answer.lower(), category)))
+                
+                # Update category tracking
+                await self.execute_with_timeout(conn.execute("""
+                    INSERT INTO category_tracking (category, subcategory, region, last_used)
+                    VALUES (?, ?, ?, datetime('now'))
+                    ON CONFLICT(category, subcategory, region) DO UPDATE SET
+                        times_used = times_used + 1,
+                        last_used = datetime('now')
+                """, (category, subcategory, region)))
+                
                 await conn.commit()
                 
             except Exception as e:
                 logger.error(f"Failed to add question to history: {e}")
                 raise DatabaseError(f"Failed to add question: {e}")
+
+    async def get_recently_used_answers(self, days: int = 15) -> List[str]:
+        """Get answers that have been used recently."""
+        async with self.get_connection() as conn:
+            try:
+                async with conn.execute("""
+                    SELECT answer FROM answer_tracking
+                    WHERE last_used > datetime('now', ?)
+                """, (f'-{days} days',)) as cursor:
+                    rows = await cursor.fetchall()
+                    return [row[0] for row in rows]
+            except Exception as e:
+                logger.error(f"Failed to get recent answers: {e}")
+                return []
+
+    async def get_category_stats(self) -> Dict[str, Dict[str, int]]:
+        """Get usage statistics for categories and subcategories."""
+        async with self.get_connection() as conn:
+            try:
+                async with conn.execute("""
+                    SELECT category, subcategory, region, times_used
+                    FROM category_tracking
+                    ORDER BY times_used DESC
+                """) as cursor:
+                    rows = await cursor.fetchall()
+                    stats = {}
+                    for row in rows:
+                        cat = row[0]
+                        subcat = row[1]
+                        region = row[2]
+                        times = row[3]
+                        
+                        if cat not in stats:
+                            stats[cat] = {'total': 0, 'subcategories': {}, 'regions': {}}
+                        
+                        stats[cat]['total'] += times
+                        if subcat:
+                            stats[cat]['subcategories'][subcat] = \
+                                stats[cat]['subcategories'].get(subcat, 0) + times
+                        if region:
+                            stats[cat]['regions'][region] = \
+                                stats[cat]['regions'].get(region, 0) + times
+                    
+                    return stats
+            except Exception as e:
+                logger.error(f"Failed to get category stats: {e}")
+                return {}
+
+    async def get_least_used_categories(self, limit: int = 5) -> List[Dict[str, Any]]:
+        """Get categories and subcategories that have been used least recently."""
+        async with self.get_connection() as conn:
+            try:
+                async with conn.execute("""
+                    SELECT category, subcategory, region, times_used, last_used
+                    FROM category_tracking
+                    ORDER BY times_used ASC, last_used ASC
+                    LIMIT ?
+                """, (limit,)) as cursor:
+                    rows = await cursor.fetchall()
+                    return [{
+                        'category': row[0],
+                        'subcategory': row[1],
+                        'region': row[2],
+                        'times_used': row[3],
+                        'last_used': row[4]
+                    } for row in rows]
+            except Exception as e:
+                logger.error(f"Failed to get least used categories: {e}")
+                return []
 
     async def update_question_stats(
         self,
