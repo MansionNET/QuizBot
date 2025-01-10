@@ -467,17 +467,30 @@ class QuizGame:
                         await self.end_game()
                         return
 
-                    # Get question from Mistral service
+                    # Get question from Mistral service with retries and fallback
                     self.logger.debug("Fetching next question...")
-                    question = await self.mistral.get_trivia_question(self.state.used_questions)
-                    if not question:
-                        self.logger.warning("Using fallback question")
-                        question = self.mistral._get_fallback_question()
+                    question = None
+                    retry_count = 0
+                    max_retries = 2
 
+                    while retry_count < max_retries and not question:
+                        try:
+                            question = await self.mistral.get_trivia_question(self.state.used_questions)
+                        except Exception as e:
+                            self.logger.warning(f"Failed to get question from API (attempt {retry_count + 1}): {e}")
+                            retry_count += 1
+                            if retry_count < max_retries:
+                                await asyncio.sleep(1)  # Brief delay between retries
+
+                    # Use fallback if all API attempts failed
                     if not question:
-                        self.logger.error("Failed to get question, ending game")
-                        await self.end_game()
-                        return
+                        self.logger.warning("All API attempts failed, using fallback question")
+                        question = self.mistral._get_fallback_question()
+                        if not question:
+                            self.logger.error("Failed to get fallback question, ending game")
+                            await self.end_game()
+                            return
+                        self.logger.info("Successfully got fallback question")
 
                     # Update question state
                     self.state.question_number += 1
@@ -524,39 +537,8 @@ class QuizGame:
 
                     self.logger.debug(f"Timeout task created for question {self.state.question_number}")
 
-            except asyncio.TimeoutError:
-                self.logger.error("Question fetch timed out, using fallback")
-                try:
-                    question = self.mistral._get_fallback_question()
-                    if question:
-                        self.state.current_question = question[0]
-                        self.state.current_answer = question[1]
-                        self.state.fun_fact = question[2]
-                        self.state.question_time = datetime.now()
-                        
-                        await self.irc.send_channel_message(
-                            self.state.channel,
-                            self.state.current_question,
-                            question=True,
-                            number=self.state.question_number
-                        )
-                        
-                        self.timeout_task = await self._create_tracked_task(
-                            self.handle_timeout,
-                            f"timeout_task_{self.state.question_number}",
-                            self.state.answer_timeout
-                        )
-                        if not self.timeout_task:
-                            raise RuntimeError("Failed to create timeout task for fallback")
-                    else:
-                        self.logger.error("Failed to get fallback question, ending game")
-                        await self.end_game()
-                except Exception as e:
-                    self.logger.error(f"Error processing fallback question: {e}")
-                    await self._cleanup_on_error(tasks_to_cancel)
-                    await self.end_game()
-            except Exception as e:
-                self.logger.error(f"Error getting next question: {e}")
+            except (asyncio.TimeoutError, Exception) as e:
+                self.logger.error(f"Error in next_question: {e}")
                 await self._cleanup_on_error(tasks_to_cancel)
                 await self.end_game()
 

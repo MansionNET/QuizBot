@@ -40,10 +40,12 @@ class Database:
                 category TEXT,
                 subcategory TEXT,
                 region TEXT,
+                difficulty TEXT,
                 times_asked INTEGER DEFAULT 1,
                 times_answered_correctly INTEGER DEFAULT 0,
                 last_asked TIMESTAMP,
                 average_answer_time REAL DEFAULT 0,
+                success_rate REAL DEFAULT 0,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """,
@@ -52,6 +54,8 @@ class Database:
                 answer TEXT PRIMARY KEY,
                 category TEXT,
                 times_used INTEGER DEFAULT 1,
+                success_rate REAL DEFAULT 0,
+                average_answer_time REAL DEFAULT 0,
                 last_used TIMESTAMP,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
@@ -62,6 +66,8 @@ class Database:
                 subcategory TEXT,
                 region TEXT,
                 times_used INTEGER DEFAULT 1,
+                success_rate REAL DEFAULT 0,
+                average_answer_time REAL DEFAULT 0,
                 last_used TIMESTAMP,
                 PRIMARY KEY (category, subcategory, region)
             )
@@ -265,7 +271,8 @@ class Database:
         answer: str,
         category: str,
         subcategory: str,
-        region: str = "global"
+        region: str = "global",
+        difficulty: str = "medium"
     ) -> None:
         """Add a new question to the history and update tracking tables."""
         if not question or not answer:
@@ -277,9 +284,9 @@ class Database:
                 # Add to question history
                 await self.execute_with_timeout(conn.execute("""
                     INSERT INTO question_history
-                    (question_hash, question, answer, category, subcategory, region, last_asked)
-                    VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
-                """, (question_hash, question, answer, category, subcategory, region)))
+                    (question_hash, question, answer, category, subcategory, region, difficulty, last_asked)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))
+                """, (question_hash, question, answer, category, subcategory, region, difficulty)))
                 
                 # Update answer tracking
                 await self.execute_with_timeout(conn.execute("""
@@ -287,6 +294,7 @@ class Database:
                     VALUES (?, ?, datetime('now'))
                     ON CONFLICT(answer) DO UPDATE SET
                         times_used = times_used + 1,
+                        success_rate = (success_rate * times_used) / (times_used + 1),
                         last_used = datetime('now')
                 """, (answer.lower(), category)))
                 
@@ -296,6 +304,7 @@ class Database:
                     VALUES (?, ?, ?, datetime('now'))
                     ON CONFLICT(category, subcategory, region) DO UPDATE SET
                         times_used = times_used + 1,
+                        success_rate = (success_rate * times_used) / (times_used + 1),
                         last_used = datetime('now')
                 """, (category, subcategory, region)))
                 
@@ -305,47 +314,121 @@ class Database:
                 logger.error(f"Failed to add question to history: {e}")
                 raise DatabaseError(f"Failed to add question: {e}")
 
-    async def get_recently_used_answers(self, days: int = 15) -> List[str]:
-        """Get answers that have been used recently."""
+    async def get_recently_used_answers(self, days: int = 15) -> List[Dict[str, Any]]:
+        """Get answers that have been used recently with their metadata."""
         async with self.get_connection() as conn:
             try:
+                # Get both answers and their categories with usage stats
                 async with conn.execute("""
-                    SELECT answer FROM answer_tracking
-                    WHERE last_used > datetime('now', ?)
+                    SELECT 
+                        a.answer,
+                        a.category,
+                        a.times_used as usage_count,
+                        a.last_used,
+                        GROUP_CONCAT(DISTINCT q.question) as questions
+                    FROM answer_tracking a
+                    LEFT JOIN question_history q ON q.answer = a.answer
+                    WHERE a.last_used > datetime('now', ?)
+                    GROUP BY a.answer, a.category
+                    ORDER BY last_used DESC, usage_count DESC
                 """, (f'-{days} days',)) as cursor:
                     rows = await cursor.fetchall()
-                    return [row[0] for row in rows]
+                    
+                    # Return detailed answer history
+                    return [{
+                        'answer': row[0],
+                        'category': row[1],
+                        'usage_count': row[2],
+                        'last_used': row[3],
+                        'questions': row[4].split(',') if row[4] else []
+                    } for row in rows]
             except Exception as e:
                 logger.error(f"Failed to get recent answers: {e}")
                 return []
 
-    async def get_category_stats(self) -> Dict[str, Dict[str, int]]:
-        """Get usage statistics for categories and subcategories."""
+    async def get_category_stats(self) -> Dict[str, Dict[str, Any]]:
+        """Get detailed statistics for categories including performance metrics."""
         async with self.get_connection() as conn:
             try:
                 async with conn.execute("""
-                    SELECT category, subcategory, region, times_used
-                    FROM category_tracking
-                    ORDER BY times_used DESC
+                    SELECT 
+                        c.category,
+                        c.subcategory,
+                        c.region,
+                        c.times_used,
+                        c.success_rate,
+                        c.average_answer_time,
+                        COUNT(DISTINCT q.question_hash) as unique_questions,
+                        AVG(q.success_rate) as avg_question_success,
+                        AVG(q.average_answer_time) as avg_question_time,
+                        MAX(c.last_used) as last_used
+                    FROM category_tracking c
+                    LEFT JOIN question_history q 
+                        ON q.category = c.category 
+                        AND q.subcategory = c.subcategory
+                        AND q.region = c.region
+                    GROUP BY c.category, c.subcategory, c.region
+                    ORDER BY c.times_used DESC
                 """) as cursor:
                     rows = await cursor.fetchall()
                     stats = {}
+                    
                     for row in rows:
                         cat = row[0]
                         subcat = row[1]
                         region = row[2]
-                        times = row[3]
                         
                         if cat not in stats:
-                            stats[cat] = {'total': 0, 'subcategories': {}, 'regions': {}}
+                            stats[cat] = {
+                                'total_uses': 0,
+                                'success_rate': 0,
+                                'avg_answer_time': 0,
+                                'subcategories': {},
+                                'regions': {},
+                                'performance': {
+                                    'unique_questions': 0,
+                                    'avg_success_rate': 0,
+                                    'avg_answer_time': 0
+                                }
+                            }
                         
-                        stats[cat]['total'] += times
+                        # Update category totals
+                        stats[cat]['total_uses'] += row[3]  # times_used
+                        stats[cat]['success_rate'] = (
+                            stats[cat]['success_rate'] + row[4]
+                        ) / 2 if stats[cat]['success_rate'] else row[4]
+                        stats[cat]['avg_answer_time'] = (
+                            stats[cat]['avg_answer_time'] + row[5]
+                        ) / 2 if stats[cat]['avg_answer_time'] else row[5]
+                        
+                        # Track subcategory stats
                         if subcat:
-                            stats[cat]['subcategories'][subcat] = \
-                                stats[cat]['subcategories'].get(subcat, 0) + times
+                            stats[cat]['subcategories'][subcat] = {
+                                'times_used': row[3],
+                                'success_rate': row[4],
+                                'avg_answer_time': row[5],
+                                'unique_questions': row[6],
+                                'last_used': row[9]
+                            }
+                        
+                        # Track region stats
                         if region:
-                            stats[cat]['regions'][region] = \
-                                stats[cat]['regions'].get(region, 0) + times
+                            stats[cat]['regions'][region] = {
+                                'times_used': row[3],
+                                'success_rate': row[4],
+                                'avg_answer_time': row[5],
+                                'unique_questions': row[6],
+                                'last_used': row[9]
+                            }
+                        
+                        # Update performance metrics
+                        stats[cat]['performance']['unique_questions'] += row[6]
+                        stats[cat]['performance']['avg_success_rate'] = (
+                            stats[cat]['performance']['avg_success_rate'] + row[7]
+                        ) / 2 if stats[cat]['performance']['avg_success_rate'] else row[7]
+                        stats[cat]['performance']['avg_answer_time'] = (
+                            stats[cat]['performance']['avg_answer_time'] + row[8]
+                        ) / 2 if stats[cat]['performance']['avg_answer_time'] else row[8]
                     
                     return stats
             except Exception as e:
@@ -386,6 +469,20 @@ class Database:
             
         async with self.get_connection() as conn:
             try:
+                # Get current question info
+                async with conn.execute("""
+                    SELECT answer, category, subcategory, region, times_asked
+                    FROM question_history
+                    WHERE question_hash = ?
+                """, (question_hash,)) as cursor:
+                    row = await cursor.fetchone()
+                    if not row:
+                        raise DatabaseError(f"Question not found: {question_hash}")
+                    
+                    answer, category, subcategory, region, times_asked = row
+                    new_times_asked = times_asked + 1
+                
+                # Update question history with success rate
                 await self.execute_with_timeout(conn.execute("""
                     UPDATE question_history
                     SET times_asked = times_asked + 1,
@@ -394,14 +491,173 @@ class Database:
                             (average_answer_time * times_asked + ?) /
                             (times_asked + 1)
                         ),
+                        success_rate = CAST(times_answered_correctly + ? AS FLOAT) / (times_asked + 1),
                         last_asked = datetime('now')
                     WHERE question_hash = ?
-                """, (int(answered_correctly), answer_time, question_hash)))
+                """, (int(answered_correctly), answer_time, int(answered_correctly), question_hash)))
+                
+                # Update answer tracking
+                await self.execute_with_timeout(conn.execute("""
+                    UPDATE answer_tracking
+                    SET success_rate = (
+                            (success_rate * times_used + ?) / (times_used + 1)
+                        ),
+                        average_answer_time = (
+                            (average_answer_time * times_used + ?) / (times_used + 1)
+                        )
+                    WHERE answer = ?
+                """, (int(answered_correctly), answer_time, answer.lower())))
+                
+                # Update category tracking
+                await self.execute_with_timeout(conn.execute("""
+                    UPDATE category_tracking
+                    SET success_rate = (
+                            (success_rate * times_used + ?) / (times_used + 1)
+                        ),
+                        average_answer_time = (
+                            (average_answer_time * times_used + ?) / (times_used + 1)
+                        )
+                    WHERE category = ? AND subcategory = ? AND region = ?
+                """, (int(answered_correctly), answer_time, category, subcategory, region)))
+                
                 await conn.commit()
                 
             except Exception as e:
                 logger.error(f"Failed to update question stats: {e}")
                 raise DatabaseError(f"Failed to update question stats: {e}")
+
+    async def get_question_performance_metrics(self, category: Optional[str] = None) -> Dict[str, Any]:
+        """Get detailed performance metrics for questions, optionally filtered by category."""
+        async with self.get_connection() as conn:
+            try:
+                query = """
+                    SELECT 
+                        difficulty,
+                        COUNT(*) as total_questions,
+                        AVG(success_rate) as avg_success_rate,
+                        AVG(average_answer_time) as avg_answer_time,
+                        SUM(CASE WHEN success_rate < 0.3 THEN 1 ELSE 0 END) as hard_questions,
+                        SUM(CASE WHEN success_rate > 0.7 THEN 1 ELSE 0 END) as easy_questions
+                    FROM question_history
+                    WHERE times_asked >= 5
+                """
+                params = []
+                if category:
+                    query += " AND category = ?"
+                    params.append(category)
+                
+                query += " GROUP BY difficulty ORDER BY difficulty"
+                
+                async with conn.execute(query, params) as cursor:
+                    rows = await cursor.fetchall()
+                    
+                    metrics = {
+                        'difficulty_distribution': {},
+                        'overall': {
+                            'total_questions': 0,
+                            'avg_success_rate': 0,
+                            'avg_answer_time': 0,
+                            'hard_questions': 0,
+                            'easy_questions': 0
+                        }
+                    }
+                    
+                    for row in rows:
+                        diff = row[0] or 'medium'  # Default to medium if None
+                        metrics['difficulty_distribution'][diff] = {
+                            'total_questions': row[1],
+                            'avg_success_rate': row[2],
+                            'avg_answer_time': row[3],
+                            'hard_questions': row[4],
+                            'easy_questions': row[5]
+                        }
+                        
+                        # Update overall metrics
+                        metrics['overall']['total_questions'] += row[1]
+                        metrics['overall']['hard_questions'] += row[4]
+                        metrics['overall']['easy_questions'] += row[5]
+                    
+                    # Calculate overall averages if we have data
+                    if metrics['overall']['total_questions'] > 0:
+                        total = metrics['overall']['total_questions']
+                        metrics['overall']['avg_success_rate'] = sum(
+                            d['avg_success_rate'] * d['total_questions']
+                            for d in metrics['difficulty_distribution'].values()
+                        ) / total
+                        metrics['overall']['avg_answer_time'] = sum(
+                            d['avg_answer_time'] * d['total_questions']
+                            for d in metrics['difficulty_distribution'].values()
+                        ) / total
+                    
+                    return metrics
+                    
+            except Exception as e:
+                logger.error(f"Failed to get question performance metrics: {e}")
+                return {}
+
+    async def get_question_suggestions(self, count: int = 5) -> List[Dict[str, Any]]:
+        """Get suggestions for questions that might need adjustment based on performance."""
+        async with self.get_connection() as conn:
+            try:
+                async with conn.execute("""
+                    SELECT 
+                        question,
+                        answer,
+                        category,
+                        difficulty,
+                        times_asked,
+                        success_rate,
+                        average_answer_time
+                    FROM question_history
+                    WHERE times_asked >= 5
+                    AND (
+                        (difficulty = 'easy' AND success_rate < 0.3)
+                        OR (difficulty = 'hard' AND success_rate > 0.7)
+                        OR (success_rate < 0.2)
+                        OR (success_rate > 0.8)
+                        OR (average_answer_time > 15)
+                    )
+                    ORDER BY times_asked DESC
+                    LIMIT ?
+                """, (count,)) as cursor:
+                    rows = await cursor.fetchall()
+                    return [{
+                        'question': row[0],
+                        'answer': row[1],
+                        'category': row[2],
+                        'difficulty': row[3],
+                        'times_asked': row[4],
+                        'success_rate': row[5],
+                        'average_answer_time': row[6],
+                        'suggestion': self._get_question_suggestion(row[3], row[5], row[6])
+                    } for row in rows]
+            except Exception as e:
+                logger.error(f"Failed to get question suggestions: {e}")
+                return []
+
+    def _get_question_suggestion(
+        self,
+        difficulty: str,
+        success_rate: float,
+        answer_time: float
+    ) -> str:
+        """Generate a suggestion for question adjustment based on metrics."""
+        suggestions = []
+        
+        if difficulty == 'easy' and success_rate < 0.3:
+            suggestions.append("Consider increasing difficulty to 'medium'")
+        elif difficulty == 'hard' and success_rate > 0.7:
+            suggestions.append("Consider decreasing difficulty to 'medium'")
+            
+        if success_rate < 0.2:
+            suggestions.append("Question may be too difficult or unclear")
+        elif success_rate > 0.8:
+            suggestions.append("Question may be too easy")
+            
+        if answer_time > 15:
+            suggestions.append("Question may take too long to answer")
+            
+        return "; ".join(suggestions) if suggestions else "No adjustment needed"
 
     async def cleanup_old_questions(self, days: int = 30) -> int:
         """Remove questions that haven't been asked in specified days."""

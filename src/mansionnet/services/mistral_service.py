@@ -33,7 +33,7 @@ class MistralService:
             
         self.api_key = api_key
         self.base_url = "https://api.mistral.ai/v1"
-        self.model = "mistral-tiny"
+        self.model = "mistral-medium"  # More reliable model
         
         # Database connection
         self.db = db or Database()
@@ -42,9 +42,12 @@ class MistralService:
         self.session = requests.Session()
         
         # Cache and tracking
-        self.question_cache = deque(maxlen=100)
-        self.recent_questions = deque(maxlen=20)
-        self.recent_categories = deque(maxlen=5)
+        self.question_cache = deque(maxlen=500)  # Increased cache size
+        self.recent_questions = deque(maxlen=100)  # Track more questions
+        self.recent_categories = deque(maxlen=10)  # Track more categories
+        self.recent_answers = deque(maxlen=50)    # Track recent answers
+        self.last_category = None                 # Track last used category
+        self.consecutive_category_count = 0       # Track category repetition
         
         # Simple rate limiting
         self.last_request_time = None
@@ -75,8 +78,10 @@ class MistralService:
             data = {
                 "model": self.model,
                 "messages": messages,
-                "temperature": 0.7,
-                "max_tokens": 300
+                "temperature": 0.5,  # Lower temperature for more consistent responses
+                "max_tokens": 300,
+                "top_p": 0.9,  # Add top_p for better response quality
+                "presence_penalty": 0.6  # Encourage diverse responses
             }
             
             response = self.session.post(
@@ -191,10 +196,13 @@ class MistralService:
                 
                 # Get recently used answers to avoid repetition
                 try:
-                    recent_answers = await self.db.get_recently_used_answers(days=15)
+                    recent_answers_data = await self.db.get_recently_used_answers(days=15)
+                    recent_answers = [answer['answer'] for answer in recent_answers_data]
+                    self.recent_answers = recent_answers  # Update instance tracking
                 except Exception as e:
                     logger.debug(f"Failed to get recent answers: {e}")
                     recent_answers = []
+                    recent_answers_data = []
                 
                 # Generate the prompt with regional context
                 prompt = self._generate_prompt(
@@ -206,22 +214,31 @@ class MistralService:
                     recent_answers
                 )
                 
-                # Make API request
+                # Make API request and parse response
                 response = self._make_api_request([{
                     "role": "user",
                     "content": prompt
                 }])
                 
                 if not response:
+                    logger.warning("API request failed or returned empty response")
                     attempts += 1
                     continue
                 
-                # Parse response
-                question, answer, fun_fact = self._parse_response(
-                    response['choices'][0]['message']['content']
-                )
-                
-                if not all([question, answer, fun_fact]):
+                try:
+                    content = response.get('choices', [{}])[0].get('message', {}).get('content', '')
+                    if not content:
+                        logger.warning("Empty content in API response")
+                        attempts += 1
+                        continue
+                        
+                    question, answer, fun_fact = self._parse_response(content)
+                    if not all([question, answer, fun_fact]):
+                        logger.warning("Failed to parse complete question from response")
+                        attempts += 1
+                        continue
+                except (KeyError, IndexError, AttributeError) as e:
+                    logger.error(f"Invalid API response structure: {e}")
                     attempts += 1
                     continue
                 
@@ -236,9 +253,27 @@ class MistralService:
                     attempts += 1
                     continue
                 
+                # Check for category repetition
+                if category == self.last_category:
+                    self.consecutive_category_count += 1
+                    if self.consecutive_category_count > 1:  # Allow max 2 questions from same category
+                        attempts += 1
+                        continue
+                else:
+                    self.consecutive_category_count = 0
+                    self.last_category = category
+
+                # Check for answer repetition
+                if (answer.lower() in self.recent_answers or 
+                    answer.lower() in [a.lower() for a in recent_answers] or
+                    any(answer.lower() == a['answer'].lower() for a in recent_answers_data)):
+                    attempts += 1
+                    continue
+
                 # Update tracking
                 self.recent_questions.append(question)
                 self.recent_categories.append(category)
+                self.recent_answers.append(answer.lower())
                 
                 # Try to add to database, but continue even if it fails
                 try:
@@ -282,45 +317,81 @@ class MistralService:
             avoid_str = "\nAvoid using these answers that were recently used: " + \
                        ", ".join(recent_answers[:10])  # Limit to 10 for prompt length
         
+        # Get current category distribution
+        category_counts = {}
+        for cat in self.recent_categories:
+            category_counts[cat] = category_counts.get(cat, 0) + 1
+
+        # Find underrepresented categories
+        total_questions = len(self.recent_categories) or 1
+        category_percentages = {
+            cat: (count / total_questions) * 100 
+            for cat, count in category_counts.items()
+        }
+
+        # Build diversity guidance
+        diversity_str = "\nCategory distribution:"
+        for cat, pct in category_percentages.items():
+            diversity_str += f"\n- {cat}: {pct:.1f}%"
+        diversity_str += "\nPrefer categories with lower percentages."
+
         return f"""Generate a {difficulty} trivia question about {subcategory} 
-        (category: {category}){region_str} following these STRICT rules:{context_str}{avoid_str}
+        (category: {category}){region_str} following these STRICT rules:{context_str}{avoid_str}{diversity_str}
         
-        ESSENTIAL REQUIREMENTS:
+        TOPIC REQUIREMENTS:
+        1. Questions MUST be diverse across different topics
+        2. NO more than two questions from the same category in a row
+        3. Balance between:
+           - Pop Culture (movies, TV, music, celebrities)
+           - Science & Nature (animals, space, environment)
+           - History & Geography (world events, places)
+           - Sports & Games (rules, teams, players)
+           - Arts & Literature (books, paintings, authors)
+           - Technology & Internet (apps, websites, gadgets)
+           - Food & Drink (cuisine, ingredients, dishes)
+           - General Knowledge (common facts, everyday items)
+
+        QUESTION REQUIREMENTS:
         1. Question MUST be about ESTABLISHED, VERIFIED facts only
         2. NO questions about recent or ongoing events
         3. NO questions using words like "first", "only", "most", "best"
-        4. Focus on well-documented, mainstream topics
-        5. Answer MUST be immediately recognizable
-        6. Answer MUST be 1-3 words maximum
+        4. Focus on well-documented, MAINSTREAM topics that most people would know
+        5. Answer MUST be immediately recognizable to average people
+        6. Answer MUST be 1-2 words maximum
         7. NO trick questions or complex wordplay
         8. AVOID specific dates, numbers, or statistics
         9. NO questions about "recent", "latest", or "current" events
-        10. Question should have only ONE clear, verifiable answer
+        10. Question MUST have only ONE clear, widely known answer
+        11. NEVER ask about the same topic twice in a row
+        12. NEVER ask variations of the same question
+        13. Answers must be COMMON KNOWLEDGE, not obscure facts
+        14. NO region-specific questions unless explicitly about that region
+        15. Questions should be DIVERSE across different topics
 
         QUESTION STYLE:
         - Simple, clear language
         - Question must be 10-50 characters long
         - Start with "What", "Which", "Who", "Where", or "How"
         - No complex terminology
-        - Suitable for casual players
-        - Make it interesting and engaging
+        - Suitable for casual players worldwide
+        - Make it interesting but keep it simple
         
         EXAMPLES OF GOOD QUESTIONS:
-        "Which ancient wonder still stands in Egypt?" -> "pyramids"
-        "What element makes up most of Earth's atmosphere?" -> "nitrogen"
-        "Which band performed 'Bohemian Rhapsody'?" -> "queen"
-        "What is the largest planet in our solar system?" -> "jupiter"
+        "Which planet has rings?" -> "saturn"
+        "What animal is Mickey Mouse?" -> "mouse"
+        "Which metal is used in batteries?" -> "lithium"
+        "What is the capital of France?" -> "paris"
 
         EXAMPLES OF BAD QUESTIONS:
-        "Who was the first person to..." (avoid superlatives)
-        "Which celebrity recently..." (avoid time-sensitive)
-        "What is the most popular..." (avoid rankings)
-        "Who is currently leading..." (avoid current events)
+        "Which Native American myth..." (too specific)
+        "What is the traditional dance of..." (too regional)
+        "Who voiced character X in..." (too obscure)
+        "Which organization manages..." (too specialized)
 
         Format response EXACTLY as:
         Question: [your question]
         Answer: [simple answer in lowercase]
-        Fun Fact: [brief, verifiable fact about the answer]"""
+        Fun Fact: [brief, widely known fact about the answer]"""
 
     def _get_fallback_question(self) -> Tuple[str, str, str]:
         """Provide a fallback question when API fails."""

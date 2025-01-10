@@ -56,6 +56,38 @@ def has_clear_context(question: str) -> bool:
     # Questions should generally mention a specific subject/topic
     return any(x in question.lower() for x in ['who', 'what', 'which', 'where', 'when', 'how'])
 
+def is_too_regional(question: str) -> bool:
+    """Check if question is too region-specific without context."""
+    regional_patterns = [
+        r'which (country|nation|region|state|city|province)',
+        r'what is the .* (of|in) (the )?[A-Z][a-z]+',
+        r'who is the .* (of|in) (the )?[A-Z][a-z]+',
+        r'traditional|native|indigenous|local|regional'
+    ]
+    return any(re.search(pattern, question.lower()) for pattern in regional_patterns)
+
+def is_too_specific(question: str) -> bool:
+    """Check if question is too specific or niche."""
+    specific_patterns = [
+        r'which (organization|institute|company|corporation)',
+        r'who (created|invented|discovered|founded)',
+        r'what is the name',
+        r'which version|edition|release',
+        r'who voiced|directed|produced|wrote',
+        r'which myth|legend|story|tale'
+    ]
+    return any(re.search(pattern, question.lower()) for pattern in specific_patterns)
+
+def is_too_technical(question: str) -> bool:
+    """Check if question is too technical or specialized."""
+    technical_patterns = [
+        r'which (protocol|standard|framework|algorithm)',
+        r'what is the (formula|equation|coefficient)',
+        r'which (theory|principle|law|theorem)',
+        r'technical|scientific|mathematical|chemical'
+    ]
+    return any(re.search(pattern, question.lower()) for pattern in technical_patterns)
+
 def validate_question_content(
     question: str,
     answer: str,
@@ -67,7 +99,7 @@ def validate_question_content(
     # Get validation parameters from config
     min_question_length = min_question_length or VALIDATION_CONFIG.get('min_question_length', 10)
     max_question_length = max_question_length or VALIDATION_CONFIG.get('max_question_length', 200)
-    max_answer_words = max_answer_words or VALIDATION_CONFIG.get('max_answer_words', 3)
+    max_answer_words = max_answer_words or VALIDATION_CONFIG.get('max_answer_words', 2)  # Stricter word limit
     
     # Check question length
     if not is_valid_length(question, min_chars=min_question_length, max_chars=max_question_length):
@@ -100,6 +132,22 @@ def validate_question_content(
     # Check answer format
     if not re.match(r'^[\w\s-]+$', answer):
         return False, "Answer contains invalid characters"
+    
+    # Check for overly regional questions
+    if is_too_regional(question):
+        return False, "Question too region-specific"
+    
+    # Check for overly specific questions
+    if is_too_specific(question):
+        return False, "Question too specific or niche"
+    
+    # Check for overly technical questions
+    if is_too_technical(question):
+        return False, "Question too technical"
+    
+    # Check if answer is common enough
+    if answer.lower() not in ALTERNATIVE_ANSWERS and len(answer) > 12:
+        return False, "Answer not common enough"
     
     return True, "Valid question"
 
