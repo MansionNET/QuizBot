@@ -43,7 +43,7 @@ class QuizGame:
         self._stopping = False
 
     async def _cancel_tasks_safely(self, tasks):
-        """Helper method to safely cancel tasks without recursion."""
+        """Helper method to safely cancel tasks."""
         if not tasks:
             return
             
@@ -63,15 +63,7 @@ class QuizGame:
         *args,
         **kwargs
     ):
-        """
-        Create a tracked task with proper exception handling.
-        
-        Args:
-            coro_or_func: Either a coroutine object or a coroutine function
-            name: Optional name for the task
-            *args: Positional arguments if coro_or_func is a function
-            **kwargs: Keyword arguments if coro_or_func is a function
-        """
+        """Create a tracked task with proper exception handling."""
         if self._stopping:
             self.logger.debug(f"Not creating new task {name} while stopping")
             return None
@@ -81,10 +73,8 @@ class QuizGame:
             if asyncio.iscoroutinefunction(coro_or_func) and (args or kwargs):
                 bound_func = functools.partial(coro_or_func, *args, **kwargs)
                 coro = bound_func()
-            # If it's a coroutine function without args, call it
             elif asyncio.iscoroutinefunction(coro_or_func):
                 coro = coro_or_func()
-            # If it's already a coroutine object, use it directly
             elif asyncio.iscoroutine(coro_or_func):
                 coro = coro_or_func
             else:
@@ -174,16 +164,8 @@ class QuizGame:
                 # Handle game progression
                 if self.state.question_number >= self.state.total_questions:
                     self.logger.info("All questions completed after timeout, ending game")
-                    # Create end game task
-                    end_task = await self._create_tracked_task(
-                        self.end_game,
-                        "end_game_timeout"
-                    )
-                    if not end_task:
-                        self.logger.error("Failed to create end game task")
-                        return
-                        
-                elif self.state.active:  # Double check game is still active
+                    await self.end_game()
+                elif self.state.active:
                     self.logger.info(f"Starting question {self.state.question_number + 1} after timeout")
                     
                     # Cancel existing question task if any
@@ -256,41 +238,60 @@ class QuizGame:
 
     async def end_game(self) -> None:
         """End the current game and cleanup resources."""
-        async with self.lock:
-            if not self.state.active:
-                return
-                
-            self.logger.info("Ending game...")
-            self.state.active = False
-            
-            # Display final scores before cleanup
-            try:
-                await self._display_final_scores()
-            except Exception as e:
-                self.logger.error(f"Error displaying final scores: {e}")
-                
-            # Now proceed with cleanup
-            self._stopping = True
-        
-        # No need for recursive end_game call since we already have the lock
-        
-        # Collect remaining tasks
-        remaining_tasks = set(t for t in self._tasks if not t.done())
-        self._tasks.clear()
-        
-        # Cancel remaining tasks
-        await self._cancel_tasks_safely(remaining_tasks)
-        
-        # Close connections
         try:
-            await self.irc.disconnect()
+            async with self.lock:
+                if not self.state.active:
+                    return
+                    
+                self.logger.info("Ending game...")
+                
+                # Set stopping flag first to prevent new tasks
+                self._stopping = True
+                self.state.active = False
+                
+                # Display final scores before cleanup
+                try:
+                    await self._display_final_scores()
+                except Exception as e:
+                    self.logger.error(f"Error displaying final scores: {e}")
+                
+                # Cancel any running tasks
+                if self.timeout_task and not self.timeout_task.done():
+                    self.timeout_task.cancel()
+                if self.question_task and not self.question_task.done():
+                    self.question_task.cancel()
+                
+                # Collect and cancel remaining tasks
+                remaining_tasks = set(t for t in self._tasks if not t.done())
+                self._tasks.clear()
+                await self._cancel_tasks_safely(remaining_tasks)
+                
+                # Reset all state variables
+                self.timeout_task = None
+                self.question_task = None
+                self.state = QuizState()  # Create fresh state
+                self.score_tracker = ScoreTracker()  # Reset score tracker
+                self._stopping = False
+                
+                # Close connections
+                try:
+                    await self.irc.disconnect()
+                except Exception as e:
+                    self.logger.error(f"Error disconnecting IRC: {e}")
+                    
+                try:
+                    await self.db.close()
+                except Exception as e:
+                    self.logger.error(f"Error closing database: {e}")
+                    
         except Exception as e:
-            self.logger.error(f"Error disconnecting IRC: {e}")
-            
-        try:
-            await self.db.close()
-        except Exception as e:
-            self.logger.error(f"Error closing database: {e}")
+            self.logger.error(f"Error during game cleanup: {e}")
+            # Ensure state is reset even if cleanup fails
+            self.state = QuizState()
+            self._stopping = False
+            self.timeout_task = None
+            self.question_task = None
+            self._tasks.clear()
 
     async def handle_answer(self, username: str, answer: str) -> None:
         if not username or not answer:
@@ -312,7 +313,7 @@ class QuizGame:
                 if elapsed_time >= self.state.answer_timeout:
                     return
 
-                # Process answer without timeout
+                # Process answer
                 if is_answer_match(answer, self.state.current_answer):
                     base_points = calculate_base_points(
                         elapsed_time,
@@ -350,6 +351,8 @@ class QuizGame:
                             )
                     except asyncio.TimeoutError:
                         logger.error("Database update timed out")
+                    except Exception as e:
+                        logger.error(f"Error updating score: {e}")
                     
                     streak = self.score_tracker.streaks.get(username, 0)
                     streak_info = f" (Streak: {streak}x)" if streak > 1 else ""
@@ -377,11 +380,7 @@ class QuizGame:
                     
                     if self.state.question_number >= self.state.total_questions:
                         self.logger.info("All questions completed, ending game")
-                        # Create a new task for ending game to avoid blocking
-                        await self._create_tracked_task(
-                            self.end_game,
-                            "end_game"
-                        )
+                        await self.end_game()
                     else:
                         # Create a new task for next question
                         if self.state.active:
@@ -396,59 +395,72 @@ class QuizGame:
             logger.error(f"Error processing answer: {e}")
 
     async def start_game(self, channel: str) -> bool:
+        """Start a new quiz game."""
         if not channel:
             logger.warning("Attempted to start game with no channel")
             return False
             
         async with self.lock:
-            self.logger.debug(f"Game state before start: active={self.state.active}")
-            if self.state.active:
-                return False
-            
-            # Ensure database is initialized
             try:
-                await self.db.initialize()
-                await self.mistral.initialize()
+                self.logger.debug(f"Game state before start: active={self.state.active}")
+                
+                # Double-check state and active status
+                if self.state.active or self._stopping:
+                    return False
+                
+                # Create fresh state
+                self.state = QuizState(
+                    active=True,
+                    channel=channel,
+                    total_questions=QUIZ_CONFIG['total_questions'],
+                    answer_timeout=QUIZ_CONFIG['answer_timeout']
+                )
+                self.score_tracker = ScoreTracker()
+                self._stopping = False
+                
+                # Ensure database and services are initialized
+                try:
+                    await self.db.initialize()
+                    await self.mistral.initialize()
+                except Exception as e:
+                    logger.error(f"Failed to initialize services: {e}")
+                    self.state.active = False
+                    return False
+                
+                welcome_messages = [
+                    "🎯 New Quiz Starting!",
+                    "• Type your answer in the channel",
+                    f"• {self.state.answer_timeout} seconds per question",
+                    f"• {self.state.total_questions} questions total",
+                    "• Faster answers = More points",
+                    "• Get bonus points for answer streaks",
+                    "Type !help for detailed rules"
+                ]
+                
+                for msg in welcome_messages:
+                    await self.irc.send_channel_message(channel, msg, announcement=True)
+                    await asyncio.sleep(0.1)  # Small delay between messages
+                
+                self.logger.debug(f"Game state after start: active={self.state.active}")
+                
+                # Create first question task
+                self.question_task = await self._create_tracked_task(
+                    self.next_question,
+                    "question_task_1"
+                )
+                if not self.question_task:
+                    self.logger.error("Failed to create first question task")
+                    self.state.active = False
+                    return False
+                    
+                self.logger.debug("First question task created successfully")
+                return True
+                
             except Exception as e:
-                logger.error(f"Failed to initialize services: {e}")
-                # Continue even if initialization fails
-                
-            self.state = QuizState(
-                active=True,
-                channel=channel,
-                total_questions=QUIZ_CONFIG['total_questions'],
-                answer_timeout=QUIZ_CONFIG['answer_timeout']
-            )
-            self.score_tracker = ScoreTracker()
-            
-            welcome_messages = [
-                "🎯 New Quiz Starting!",
-                "• Type your answer in the channel",
-                f"• {self.state.answer_timeout} seconds per question",
-                f"• {self.state.total_questions} questions total",
-                "• Faster answers = More points",
-                "• Get bonus points for answer streaks",
-                "Type !help for detailed rules"
-            ]
-            
-            for msg in welcome_messages:
-                await self.irc.send_channel_message(channel, msg, announcement=True)
-                await asyncio.sleep(0.1)  # Small delay between messages
-            
-            self.logger.debug(f"Game state after start: active={self.state.active}")
-            
-            # Create first question task
-            self.question_task = await self._create_tracked_task(
-                self.next_question,
-                "question_task_1"
-            )
-            if not self.question_task:
-                self.logger.error("Failed to create first question task")
-                self.state.active = False
+                self.logger.error(f"Error starting game: {e}")
+                self.state = QuizState()  # Reset state on error
+                self._stopping = False
                 return False
-                
-            self.logger.debug("First question task created successfully")
-            return True
 
     async def next_question(self) -> None:
         """Get and display the next quiz question."""
@@ -461,12 +473,6 @@ class QuizGame:
             tasks_to_cancel = set()
             try:
                 async with asyncio.timeout(45):
-                    # Validate game state
-                    if self.state.question_number >= self.state.total_questions:
-                        self.logger.info("Maximum questions reached, ending game")
-                        await self.end_game()
-                        return
-
                     # Get question from Mistral service with retries and fallback
                     self.logger.debug("Fetching next question...")
                     question = None
@@ -490,18 +496,11 @@ class QuizGame:
                             self.logger.error("Failed to get fallback question, ending game")
                             await self.end_game()
                             return
-                        self.logger.info("Successfully got fallback question")
 
                     # Update question state
                     self.state.question_number += 1
                     self.logger.info(f"Processing question {self.state.question_number}")
                     
-                    # Recheck after increment
-                    if self.state.question_number > self.state.total_questions:
-                        self.logger.info("Maximum questions reached after increment, ending game")
-                        await self.end_game()
-                        return
-
                     # Set current question details
                     self.state.current_question = question[0]
                     self.state.current_answer = question[1]
@@ -609,7 +608,6 @@ class QuizGame:
                     channel,
                     f"📊 No stats found for {username}"
                 )
-            await asyncio.sleep(0.1)  # Small delay after sending message
             return True
         except Exception as e:
             logger.error(f"Error fetching stats: {e}")
@@ -627,15 +625,12 @@ class QuizGame:
         try:
             leaderboard = await self.db.get_leaderboard()
             if leaderboard:
-                # Send header
                 await self.irc.send_channel_message(
                     channel,
                     "🏆 Top Quiz Masters:",
                     announcement=True
                 )
-                await asyncio.sleep(0.1)  # Small delay between messages
                 
-                # Send each entry with a small delay
                 for i, entry in enumerate(leaderboard[:5], 1):
                     medal = {1: "🥇", 2: "🥈", 3: "🥉"}.get(i, "•")
                     msg = (
@@ -643,16 +638,13 @@ class QuizGame:
                         f"({entry['correct_answers']} correct)"
                     )
                     await self.irc.send_channel_message(channel, msg)
-                    await asyncio.sleep(0.1)  # Small delay between messages
-                
-                await asyncio.sleep(0.2)  # Final delay before returning
+                    await asyncio.sleep(0.1)
                 return True
             else:
                 await self.irc.send_channel_message(
                     channel,
                     "No scores yet! Start a quiz with !quiz"
                 )
-                await asyncio.sleep(0.1)  # Small delay after message
                 return True
         except Exception as e:
             logger.error(f"Error fetching leaderboard: {e}")
@@ -673,7 +665,6 @@ class QuizGame:
                 channel,
                 "Quiz stopped by administrator."
             )
-            await asyncio.sleep(0.1)  # Small delay after message
             return True
         else:
             await self.irc.send_channel_message(
@@ -695,15 +686,12 @@ class QuizGame:
         
         if command in self.command_handlers:
             try:
-                # Increase timeout for commands that send multiple messages
                 timeout_duration = 45.0 if command == '!quiz' else 15.0
                 async with asyncio.timeout(timeout_duration):
                     result = await self.command_handlers[command](message.username, message.channel)
-                    # Consider command completed if it returns True or None
                     if result is True or result is None:
-                        await asyncio.sleep(0.5)  # Small delay to ensure messages are sent
+                        await asyncio.sleep(0.5)
                         return
-                    
             except asyncio.TimeoutError:
                 logger.error(f"Command {command} timed out")
                 await self.irc.send_channel_message(
@@ -725,3 +713,4 @@ class QuizGame:
     async def cleanup(self):
         """Clean up resources when shutting down."""
         self._stopping = True
+        await self.end_game()
