@@ -80,7 +80,7 @@ class GameManager:
 
         try:
             # Get a question that hasn't been used in this game
-            question = await self.bot.question_service.generate_question(game.used_questions)
+            question = await self.bot.question_service.generate_question()
             if not question:
                 logger.error("Failed to get a unique question")
                 await self.bot.send_message(
@@ -168,7 +168,37 @@ class GameManager:
 
     def check_answer(self, given_answer: str, correct_answer: str) -> bool:
         """Check if the given answer matches the correct answer"""
-        return given_answer.lower().strip() == correct_answer.lower().strip()
+        given = given_answer.lower().strip()
+        correct = correct_answer.lower().strip()
+        
+        # Direct match
+        if given == correct:
+            return True
+            
+        # Handle plural/singular variations
+        if given.rstrip('s') == correct.rstrip('s'):
+            return True
+            
+        # Handle common variations
+        variations = {
+            'saxophone': 'reed',
+            'sax': 'reed',
+            'pink floyd': 'pinkfloyd',
+            'fleet wood mac': 'fleetwoodmac',
+            'fleet wood': 'fleetwoodmac',
+            'bruce springsteen': 'springsteen'
+        }
+        
+        # Check if given answer maps to correct answer
+        if variations.get(given) == correct:
+            return True
+            
+        # Check if correct answer has variations that match given answer
+        for var, ans in variations.items():
+            if given == ans and correct in [var, ans]:
+                return True
+                
+        return False
 
     def calculate_points(self, time_taken: float, streak: int) -> int:
         """Calculate points based on answer speed and streak"""
@@ -202,7 +232,12 @@ class GameManager:
             for player in game.players.values():
                 player.streak = 0
             
-            await asyncio.sleep(2)
+            # Send fun fact and wait before next question
+            await self.bot.send_message(
+                channel,
+                f"Fun fact: {game.current_question['fun_fact']}"
+            )
+            await asyncio.sleep(3)  # Give more time to read the fun fact
             await self.next_question(channel)
 
     async def show_final_scores(self, channel: str):

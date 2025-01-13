@@ -5,7 +5,7 @@ from typing import Optional, Dict, Set
 import irc.client
 from irc.client import ServerConnection
 from game_manager import GameManager
-from question_service import QuestionService
+from services.mistral_service import MistralService
 from database import Database
 from config import BotConfig
 
@@ -16,9 +16,9 @@ class QuizBot:
         self.config = config
         self.reactor = irc.client.Reactor()
         self.connection: Optional[ServerConnection] = None
-        self.game_manager = GameManager(self)
-        self.question_service = QuestionService(config.mistral_api_key)
         self.database = Database(config.database_url)
+        self.question_service = MistralService(config.mistral_api_key, self.database)
+        self.game_manager = GameManager(self)
         self.command_handlers = {
             '!quiz': self.cmd_quiz,
             '!help': self.cmd_help,
@@ -41,6 +41,7 @@ class QuizBot:
             self.connection.add_global_handler("disconnect", self._on_disconnect)
             
             await self.database.connect()
+            await self.question_service.start()
             
         except irc.client.ServerConnectionError as e:
             logger.error(f"Error connecting to IRC server: {e}")
@@ -56,8 +57,9 @@ class QuizBot:
         """Cleanup resources before shutdown"""
         if self.connection and self.connection.is_connected():
             self.connection.disconnect("Bot shutting down")
-        await self.database.disconnect()
         await self.game_manager.stop_all_games()
+        await self.question_service.stop()
+        await self.database.disconnect()
 
     def _on_connect(self, connection, event):
         """Handler for successful connection"""
