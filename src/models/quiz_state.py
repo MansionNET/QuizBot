@@ -188,9 +188,11 @@ class QuizState:
         await asyncio.sleep(self.question_timeout)
         
         if self.is_game_active(channel) and self.question_manager.current_question:
+            current_question = self.question_manager.current_question
             await self.irc_service.send_message(
                 channel,
-                f"⏰ Time's up! The correct answer was: {self.question_manager.current_question.answer}"
+                f"⏰ Time's up! The correct answer was: {current_question.answer} | "
+                f"Fun fact: {current_question.fun_fact}"
             )
             
             # Reset all streaks

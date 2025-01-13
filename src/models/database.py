@@ -152,7 +152,8 @@ class Database:
                         (Question.question_text.like(f"%{q['answer']}%"))
                     )
                 )
-                if not similar.scalar_one_or_none():
+                # Use first() instead of scalar_one_or_none() to handle multiple results
+                if not similar.first():
                     question = Question(
                         question_id=q['id'],
                         question_text=q['question'],

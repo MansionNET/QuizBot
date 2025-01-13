@@ -97,7 +97,7 @@ class GameManager:
             # Display question
             await self.bot.send_message(
                 channel,
-                f"Question {game.question_number}/{self.bot.config.questions_per_game}:\n"
+                f"Question {game.question_number}/{self.bot.config.questions_per_game}: "
                 f"{question['question']}"
             )
             
@@ -156,7 +156,7 @@ class GameManager:
             await self.bot.send_message(
                 channel,
                 f"🎉 Correct, {nick}! +{points} points "
-                f"(streak: {player.streak}x)\n"
+                f"(streak: {player.streak}x) | "
                 f"Fun fact: {game.current_question['fun_fact']}"
             )
             
@@ -223,21 +223,18 @@ class GameManager:
         
         game = self.games.get(channel)
         if game and game.active and game.current_question:
+            # Send answer and fun fact in a single message
             await self.bot.send_message(
                 channel,
-                f"⏰ Time's up! The correct answer was: {game.current_question['answer']}"
+                f"⏰ Time's up! The correct answer was: {game.current_question['answer']} | "
+                f"Fun fact: {game.current_question['fun_fact']}"
             )
             
             # Reset all players' streaks
             for player in game.players.values():
                 player.streak = 0
             
-            # Send fun fact and wait before next question
-            await self.bot.send_message(
-                channel,
-                f"Fun fact: {game.current_question['fun_fact']}"
-            )
-            await asyncio.sleep(3)  # Give more time to read the fun fact
+            await asyncio.sleep(3)  # Give time to read the answer and fun fact
             await self.next_question(channel)
 
     async def show_final_scores(self, channel: str):
