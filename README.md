@@ -2,6 +2,14 @@
 
 An IRC-based trivia bot powered by Mistral AI for dynamic question generation. QuizBot creates engaging quiz games with automatically generated questions across various categories, featuring scoring systems, player statistics, and multiplayer support.
 
+## IRC Server Details
+
+Join us on MansionNET IRC to chat with us, test the bot, and play some trivia! 
+
+🌐 **Server:** irc.inthemansion.com  
+🔒 **Port:** 6697 (SSL)  
+📝 **Channel:** #opers, #general, #welcome, #devs (and many others)
+
 ## Features
 
 - **Dynamic Question Generation**: Uses Mistral AI to create unique, contextually relevant questions
