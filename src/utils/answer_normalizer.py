@@ -2,11 +2,15 @@
 from typing import Dict, Optional, Set
 import re
 from datetime import datetime
+import logging
+
+logger = logging.getLogger(__name__)
 
 class AnswerNormalizer:
-    """Normalize answers to consistent formats."""
+    """Enhanced answer normalizer with improved flexibility and internationalization."""
     
     def __init__(self):
+        # Base configuration
         self.month_names = {
             'january': '01', 'february': '02', 'march': '03',
             'april': '04', 'may': '05', 'june': '06',
@@ -14,7 +18,7 @@ class AnswerNormalizer:
             'october': '10', 'november': '11', 'december': '12'
         }
         
-        # Common unit conversions (to metric)
+        # Expanded unit conversions
         self.unit_conversions = {
             'inch': 'centimeter',
             'inches': 'centimeters',
@@ -24,121 +28,165 @@ class AnswerNormalizer:
             'miles': 'kilometers',
             'pound': 'kilogram',
             'pounds': 'kilograms',
-            'fahrenheit': 'celsius'
+            'fahrenheit': 'celsius',
+            'yard': 'meter',
+            'yards': 'meters',
+            'ounce': 'gram',
+            'ounces': 'grams'
         }
         
-        # Common element symbols to full names
-        self.element_symbols = {
-            'H': 'hydrogen', 'He': 'helium', 'Li': 'lithium',
-            'Be': 'beryllium', 'B': 'boron', 'C': 'carbon',
-            'N': 'nitrogen', 'O': 'oxygen', 'F': 'fluorine',
-            'Ne': 'neon', 'Na': 'sodium', 'Mg': 'magnesium',
-            'Al': 'aluminum', 'Si': 'silicon', 'P': 'phosphorus',
-            'S': 'sulfur', 'Cl': 'chlorine', 'Ar': 'argon',
-            'K': 'potassium', 'Ca': 'calcium', 'Fe': 'iron',
-            'Au': 'gold', 'Ag': 'silver', 'Cu': 'copper',
-            'Zn': 'zinc', 'Pb': 'lead', 'Hg': 'mercury',
-            'U': 'uranium'
+        # Sport-specific score/record ranges (±5% tolerance)
+        self.sport_ranges = {
+            'basketball': 0.05,  # 5% tolerance for points
+            'football': 0.05,    # 5% for goals/points
+            'baseball': 0.05,    # 5% for runs/hits
+            'cricket': 0.05,     # 5% for runs
+            'rugby': 0.05        # 5% for points
         }
         
-        # Common name variations
-        self.name_variations = {
-            'albert einstein': 'einstein',
-            'isaac newton': 'newton',
-            'charles darwin': 'darwin',
-            'william shakespeare': 'shakespeare',
-            'leonardo da vinci': 'da vinci',
-            'michelangelo': 'michelangelo buonarroti',
-            'pablo picasso': 'picasso',
-            'vincent van gogh': 'van gogh',
-            'claude monet': 'monet',
-            'wolfgang amadeus mozart': 'mozart',
-            'ludwig van beethoven': 'beethoven',
-            'johann sebastian bach': 'bach'
+        # International sport variations
+        self.sport_variations = {
+            'soccer': ['football', 'association football'],
+            'football': ['american football', 'gridiron'],
+            'table tennis': ['ping pong', 'ping-pong'],
+            'badminton': ['shuttlecock sport'],
+        }
+        
+        # Geographic term variations
+        self.geo_variations = {
+            'united states': ['usa', 'us', 'america', 'united states of america'],
+            'united kingdom': ['uk', 'britain', 'great britain'],
+            'russia': ['russian federation'],
+            'china': ["people's republic of china", 'prc'],
+        }
+        
+        # Cultural variations
+        self.cultural_variations = {
+            # Foods
+            'dumpling': ['jiaozi', 'gyoza', 'mandu', 'momo'],
+            'flatbread': ['naan', 'pita', 'roti', 'tortilla'],
+            # Instruments
+            'drum': ['tabla', 'djembe', 'taiko'],
+            'lute': ['oud', 'pipa', 'biwa'],
+            # Art forms
+            'theater': ['theatre', 'drama', 'stage performance'],
+            'martial arts': ['kung fu', 'karate', 'judo', 'taekwondo']
         }
 
-    def normalize_answer(self, answer: str, category: str) -> str:
-        """Normalize an answer based on its category."""
+    def normalize_answer(self, answer: str, category: str, metadata: Dict = None) -> str:
+        """Normalize an answer with enhanced flexibility and context awareness."""
         answer = answer.lower().strip()
+        metadata = metadata or {}
         
+        # Basic cleanup
+        answer = re.sub(r'\s+', ' ', answer)  # Normalize whitespace
+        answer = answer.replace('_', ' ')      # Replace underscores
+        
+        # Category-specific normalization
         if category == 'science':
             return self._normalize_science_answer(answer)
         elif category == 'history':
             return self._normalize_history_answer(answer)
         elif category == 'geography':
             return self._normalize_geography_answer(answer)
-        elif category == 'music':
-            return self._normalize_music_answer(answer)
+        elif category == 'sports':
+            return self._normalize_sports_answer(answer, metadata)
+        elif category == 'arts':
+            return self._normalize_arts_answer(answer)
+        elif category == 'entertainment':
+            return self._normalize_entertainment_answer(answer)
+        elif category == 'food_drink':
+            return self._normalize_food_answer(answer)
         
         return answer
 
-    def _normalize_science_answer(self, answer: str) -> str:
-        """Normalize scientific answers."""
-        # Convert element symbols to full names
-        for symbol, name in self.element_symbols.items():
-            if answer.upper() == symbol:
-                return name
+    def _normalize_sports_answer(self, answer: str, metadata: Dict) -> str:
+        """Enhanced sports answer normalization with score/record flexibility."""
+        sport_type = metadata.get('sport_type', '').lower()
+        
+        # Handle numerical answers (scores/records)
+        if answer.replace('.', '').replace(',', '').isdigit():
+            number = float(answer.replace(',', ''))
+            # Apply sport-specific tolerance
+            tolerance = self.sport_ranges.get(sport_type, 0.05)
+            range_low = number * (1 - tolerance)
+            range_high = number * (1 + tolerance)
+            return f"{range_low:.1f}-{range_high:.1f}"
             
-        # Convert units to metric
-        for imperial, metric in self.unit_conversions.items():
-            if imperial in answer:
-                return answer.replace(imperial, metric)
-                
-        # Remove special characters and standardize spacing
-        answer = re.sub(r'[^\w\s-]', '', answer)
-        return ' '.join(answer.split())
-
-    def _normalize_history_answer(self, answer: str) -> str:
-        """Normalize historical answers."""
-        # Standardize dates
-        date_match = re.search(r'(\d{1,4})\s*(AD|BC|CE|BCE)?', answer)
-        if date_match:
-            year = date_match.group(1)
-            era = date_match.group(2) or 'CE'
-            # Convert to 4-digit year where possible
-            if len(year) <= 2:
-                current_year = datetime.now().year
-                century = current_year // 100
-                year_num = int(year)
-                if year_num > current_year % 100:
-                    century -= 1
-                year = f"{century}{year.zfill(2)}"
-            return f"{year.zfill(4)} {era}"
-            
-        # Standardize name formats
-        for full_name, preferred in self.name_variations.items():
-            if answer in [full_name, preferred]:
-                return preferred
+        # Handle sport name variations
+        for main_name, variations in self.sport_variations.items():
+            if answer in variations:
+                return main_name
                 
         return answer
 
     def _normalize_geography_answer(self, answer: str) -> str:
-        """Normalize geographical answers."""
-        # Capitalize place names
+        """Enhanced geography answer normalization."""
+        # Check for country/region variations
+        for main_name, variations in self.geo_variations.items():
+            if answer in variations:
+                return main_name
+                
+        # Handle desert names correctly
+        if 'desert' in answer:
+            parts = answer.split()
+            return ' '.join(part.capitalize() for part in parts)
+            
+        # Handle compass directions
+        directions = ['north', 'south', 'east', 'west']
         words = answer.split()
-        if len(words) <= 3:  # Only capitalize if it's likely a proper name
+        if words[0] in directions:
             return ' '.join(word.capitalize() for word in words)
             
         return answer
 
-    def _normalize_music_answer(self, answer: str) -> str:
-        """Normalize music-related answers."""
-        # Handle band name variations
-        variations = {
-            'the beatles': 'beatles',
-            'pink floyd': 'pink floyd',
-            'led zeppelin': 'led zeppelin',
-            'rolling stones': 'rolling stones',
-            'the rolling stones': 'rolling stones',
-            'queen': 'queen',
-            'the who': 'the who',
-            'eagles': 'eagles',
-            'the eagles': 'eagles'
-        }
+    def _normalize_history_answer(self, answer: str) -> str:
+        """Enhanced history answer normalization."""
+        # Remove CE/BCE/AD/BC and standardize years
+        answer = re.sub(r'\s*(CE|BCE|AD|BC)$', '', answer)
         
-        if answer in variations:
-            return variations[answer]
+        # Handle date ranges
+        if '-' in answer and all(part.strip().isdigit() for part in answer.split('-')):
+            start, end = answer.split('-')
+            return f"{start.strip()}-{end.strip()}"
             
+        # Handle centuries
+        century_match = re.match(r'(\d+)(st|nd|rd|th)\s+century', answer)
+        if century_match:
+            num = int(century_match.group(1))
+            return f"{num}th century"
+            
+        return answer
+
+    def _normalize_science_answer(self, answer: str) -> str:
+        """Normalize scientific answers."""
+        # Convert units to metric
+        for imperial, metric in self.unit_conversions.items():
+            if imperial in answer:
+                return answer.replace(imperial, metric)
+        return answer
+
+    def _normalize_arts_answer(self, answer: str) -> str:
+        """Normalize arts and culture answers."""
+        # Handle cultural variations
+        for main_term, variations in self.cultural_variations.items():
+            if answer in variations:
+                return main_term
+        return answer
+
+    def _normalize_entertainment_answer(self, answer: str) -> str:
+        """Normalize entertainment answers."""
+        # Remove "The" from beginning of titles
+        if answer.startswith('the '):
+            return answer[4:]
+        return answer
+
+    def _normalize_food_answer(self, answer: str) -> str:
+        """Normalize food and drink answers."""
+        # Handle cultural food variations
+        for main_term, variations in self.cultural_variations.items():
+            if answer in variations and 'food' in self.cultural_variations:
+                return main_term
         return answer
 
 def create_answer_variants(answer: str) -> Set[str]:
@@ -170,5 +218,21 @@ def create_answer_variants(answer: str) -> Set[str]:
         variants.add(answer.replace('mount ', 'mt '))
     if 'saint ' in answer:
         variants.add(answer.replace('saint ', 'st '))
+        
+    # Handle articles and possessives
+    variants.add(answer.replace("'s", ""))
+    for article in ['the ', 'a ', 'an ']:
+        if answer.startswith(article):
+            variants.add(answer[len(article):])
+    
+    # Handle special characters
+    variants.add(answer.replace('&', 'and'))
+    variants.add(answer.replace('and', '&'))
+    
+    # Handle numbers
+    if answer.replace(',', '').replace('.', '').isdigit():
+        num = float(answer.replace(',', ''))
+        variants.add(f"{num:,.0f}")  # With commas
+        variants.add(f"{num:.0f}")   # Without commas
         
     return variants

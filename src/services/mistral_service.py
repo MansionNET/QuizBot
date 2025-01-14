@@ -286,37 +286,64 @@ KEY REQUIREMENTS:
         """Parse and clean the API response with improved handling."""
         questions = []
         
-        # Split by question pattern
-        question_blocks = re.split(r'\d+\.|\n{2,}', content)
+        logger.debug(f"Raw content to parse: {content}")
         
-        for block in question_blocks:
+        # First try to parse as JSON
+        try:
+            json_data = json.loads(content)
+            if isinstance(json_data, list):
+                for item in json_data:
+                    if isinstance(item, dict) and 'question' in item and 'answer' in item:
+                        questions.append(item)
+                if questions:
+                    return questions
+        except json.JSONDecodeError:
+            pass
+        
+        # If not JSON, try parsing text format
+        # Split content into blocks by numbers or double newlines
+        blocks = re.split(r'\n\s*\n|\d+\.\s+', content)
+        
+        for block in blocks:
             block = block.strip()
             if not block:
                 continue
-                
+            
             try:
-                # Look for question-answer-fun fact pattern
-                matches = re.match(
-                    r'(?:Q:)?\s*(.+?)\s*(?:A:|Answer:)\s*(.+?)\s*(?:Fun Fact:|$)(.*)',
-                    block,
-                    re.DOTALL | re.IGNORECASE
-                )
+                # Extract question, answer, and fun fact using string manipulation
+                lines = block.split('\n')
+                question = None
+                answer = None
+                fun_fact = None
                 
-                if matches:
-                    question, answer, fun_fact = matches.groups()
+                for line in lines:
+                    line = line.strip()
+                    if line.startswith(('Q:', 'Question:')):
+                        question = line.split(':', 1)[1].strip()
+                    elif line.startswith(('A:', 'Answer:')):
+                        answer = line.split(':', 1)[1].strip()
+                    elif line.lower().startswith(('fun fact:', 'fun-fact:')):
+                        fun_fact = line.split(':', 1)[1].strip()
+                
+                if question and answer:
+                    logger.debug(f"Extracted - Q: {question}, A: {answer}, F: {fun_fact}")
                     
                     # Clean up the extracted parts
                     question = question.strip().rstrip('?') + '?'
                     answer = answer.strip()
-                    fun_fact = fun_fact.strip() if fun_fact else ""
+                    
+                    if not fun_fact:
+                        fun_fact = f"Additional information about {answer}"
                     
                     # Basic validation
-                    if question and answer:
+                    if len(question) > 10 and len(answer) > 0:
                         questions.append({
                             "question": question,
                             "answer": answer,
-                            "fun_fact": fun_fact or f"Related to {question.lower().replace('?', '')}"
+                            "fun_fact": fun_fact
                         })
+                else:
+                    logger.debug(f"Could not extract Q&A from block: {block[:100]}")
                 
             except Exception as e:
                 logger.warning(f"Failed to parse question block: {block[:100]}... Error: {str(e)}")
@@ -383,11 +410,12 @@ KEY REQUIREMENTS:
                             self.api_url,
                             headers=self.headers,
                             json={
-                                "model": self.default_model,
+                                "model": "mistral-medium",  # Use more capable model
                                 "messages": messages,
-                                "temperature": 0.8,
-                                "max_tokens": 1000,
-                                "top_p": 0.9
+                                "temperature": 0.7,  # Slightly lower for more focused responses
+                                "max_tokens": 2000,  # Increased token limit
+                                "top_p": 0.95,  # Slightly higher for more variety
+                                "response_format": {"type": "text"}  # Ensure text format
                             },
                             timeout=self.default_timeout
                         )
