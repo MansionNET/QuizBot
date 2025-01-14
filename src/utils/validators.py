@@ -18,21 +18,28 @@ class ValidationIssue:
 
 class QuestionValidator:
     def __init__(self):
+        # Valid question starters - expanded list
+        self.valid_starters = {
+            'what', 'which', 'who', 'where', 'when', 'how many',
+            'how much', 'in what', 'on what', 'at what', 'why',
+            'from what', 'for what'
+        }
+        
         # Words that suggest ambiguity
         self.ambiguous_words = {
             'many', 'some', 'few', 'several', 'various', 'different',
-            'most', 'any', 'other', 'such', 'like', 'similar'
+            'any', 'other', 'such', 'like', 'similar'
         }
         
         # Words that suggest multiple answers
         self.multiple_answer_indicators = {
             'example', 'examples', 'among', 'including', 'included',
-            'one', 'few', 'name', 'list', 'give'
+            'list', 'give', 'name some', 'tell me some'
         }
         
         # Subjective terms
         self.subjective_terms = {
-            'best', 'worst', 'greatest', 'most', 'least', 'famous',
+            'best', 'worst', 'greatest', 'least', 'famous',
             'popular', 'important', 'interesting', 'beautiful', 'ugly',
             'good', 'bad', 'better', 'worse', 'amazing', 'awesome'
         }
@@ -40,32 +47,22 @@ class QuestionValidator:
         # Time-relative terms
         self.relative_time_terms = {
             'recent', 'current', 'modern', 'new', 'latest', 'today',
-            'now', 'contemporary', 'present', 'recently'
+            'now', 'contemporary', 'present', 'recently', 'upcoming',
+            'future', 'past', 'ancient'
         }
         
-        # Question starters that suggest multiple answers
-        self.problematic_starters = {
-            'list', 'name', 'give', 'tell me about', 'describe',
-            'explain', 'discuss'
+        # Valid multi-word prefixes for answers
+        self.valid_prefixes = {
+            'mount', 'lake', 'saint', 'new', 'north', 'south', 'east', 'west',
+            'prince', 'princess', 'king', 'queen', 'sir', 'lady', 'lord'
         }
         
-        # Valid question starters
-        self.valid_starters = {
-            'what', 'which', 'who', 'where', 'when', 'how many',
-            'how much', 'in what', 'on what', 'at what'
+        # Valid units for numerical answers
+        self.valid_units = {
+            'feet', 'meters', 'kilometers', 'miles', 'kg', 'pounds',
+            'celsius', 'fahrenheit', 'years', 'hours', 'minutes',
+            'seconds', 'degrees'
         }
-        
-        # Common question patterns that should be avoided
-        self.problematic_patterns = [
-            (r'\b(and|or)\b', "Question contains conjunction suggesting multiple parts or choices"),
-            (r'\b(can|could|might|may)\b', "Question contains modal verb suggesting uncertainty"),
-            (r'\b(usually|sometimes|often|occasionally)\b', "Question contains frequency term suggesting ambiguity"),
-            (r'\b(probably|possibly|maybe)\b', "Question contains uncertainty term"),
-            (r'\b(etc|etc\.)\b', "Question contains 'etc' suggesting incomplete list"),
-            (r'\b(famous|well-known|popular)\b', "Question contains subjective popularity term"),
-            (r'\b(difficult|easy|hard|simple)\b', "Question contains subjective difficulty term"),
-            (r'\b(beautiful|pretty|ugly|nice)\b', "Question contains subjective aesthetic term")
-        ]
 
     def validate_question(self, data: Dict) -> List[ValidationIssue]:
         """Validate a question and return list of issues found."""
@@ -78,10 +75,10 @@ class QuestionValidator:
                 "Question is too short (min 15 chars)"
             ))
         
-        if len(data.get("answer", "")) < 2:
+        if len(data.get("answer", "")) < 1:
             issues.append(ValidationIssue(
                 ValidationSeverity.ERROR,
-                "Answer is too short (min 2 chars)"
+                "Answer is too short (min 1 char)"
             ))
             
         if len(data.get("fun_fact", "")) < 20:
@@ -105,14 +102,7 @@ class QuestionValidator:
         if not any(question.startswith(starter) for starter in self.valid_starters):
             issues.append(ValidationIssue(
                 ValidationSeverity.ERROR,
-                "Question must start with valid question word (what, which, who, where, when, how many, in what)"
-            ))
-
-        # Check for problematic starters
-        if any(question.startswith(starter) for starter in self.problematic_starters):
-            issues.append(ValidationIssue(
-                ValidationSeverity.ERROR,
-                "Question starts with word that suggests multiple or open-ended answers"
+                "Question must start with valid question word"
             ))
 
         # Length checks
@@ -123,34 +113,18 @@ class QuestionValidator:
                 f"Question is too long ({len(words)} words, max 15)"
             ))
 
+        # Answer validation with special cases
         answer_words = answer.split()
         if len(answer_words) > 3:
-            issues.append(ValidationIssue(
-                ValidationSeverity.ERROR,
-                f"Answer too long ({len(answer_words)} words, max 3)"
-            ))
-
-        # Check for answer in question
-        if answer in question:
-            issues.append(ValidationIssue(
-                ValidationSeverity.ERROR,
-                "Question contains exact answer"
-            ))
-
-        # Check for answer words in question
-        for word in answer_words:
-            if len(word) > 3 and word in question:
+            # Check if it's a valid numerical answer with units
+            is_numerical = bool(re.match(r'^\d+(\.\d+)?\s+[a-z]+$', answer))
+            is_valid_unit = any(unit in answer for unit in self.valid_units)
+            has_valid_prefix = any(prefix in answer.lower() for prefix in self.valid_prefixes)
+            
+            if not (is_numerical and is_valid_unit) and not has_valid_prefix:
                 issues.append(ValidationIssue(
-                    ValidationSeverity.WARNING,
-                    f"Question contains answer word: {word}"
-                ))
-
-        # Check for ambiguous words
-        for word in self.ambiguous_words:
-            if word in question:
-                issues.append(ValidationIssue(
-                    ValidationSeverity.WARNING,
-                    f"Question contains ambiguous word: {word}"
+                    ValidationSeverity.ERROR,
+                    f"Answer too long ({len(answer_words)} words, max 3)"
                 ))
 
         # Check for multiple answer indicators
@@ -161,6 +135,17 @@ class QuestionValidator:
                     f"Question contains word suggesting multiple answers: {word}"
                 ))
 
+        # Check for relative time terms
+        for term in self.relative_time_terms:
+            if term in question:
+                # Allow 'ancient' in history category
+                if term == 'ancient' and data.get('category') == 'history':
+                    continue
+                issues.append(ValidationIssue(
+                    ValidationSeverity.ERROR,
+                    f"Question contains relative time term: {term}"
+                ))
+
         # Check for subjective terms
         for term in self.subjective_terms:
             if term in question:
@@ -169,27 +154,17 @@ class QuestionValidator:
                     f"Question contains subjective term: {term}"
                 ))
 
-        # Check for relative time terms
-        for term in self.relative_time_terms:
-            if term in question:
-                issues.append(ValidationIssue(
-                    ValidationSeverity.ERROR,
-                    f"Question contains relative time term: {term}"
-                ))
-
-        # Check problematic patterns
-        for pattern, message in self.problematic_patterns:
-            if re.search(pattern, question):
-                issues.append(ValidationIssue(
-                    ValidationSeverity.WARNING,
-                    message
-                ))
-
-        # Fun fact checks
+        # Fun fact validation
         if question in fun_fact or answer in fun_fact:
             issues.append(ValidationIssue(
                 ValidationSeverity.WARNING,
                 "Fun fact should not repeat question or answer verbatim"
+            ))
+            
+        if len(fun_fact.split()) < 8:
+            issues.append(ValidationIssue(
+                ValidationSeverity.WARNING,
+                "Fun fact should be more detailed"
             ))
 
         # Category-specific validation
@@ -204,30 +179,48 @@ class QuestionValidator:
         answer = data.get("answer", "").lower()
 
         if category == "science":
-            # Check for proper scientific terminology
+            # Validate scientific answers
             if re.search(r'\b(thing|stuff|something)\b', question):
                 issues.append(ValidationIssue(
-                    ValidationSeverity.WARNING,
+                    ValidationSeverity.ERROR,
                     "Science questions should use precise terminology"
+                ))
+                
+            # Check for unit consistency
+            if re.search(r'\b\d+\s*(?:f|ft|foot|feet)\b', question):
+                issues.append(ValidationIssue(
+                    ValidationSeverity.WARNING,
+                    "Use metric units for science questions"
                 ))
 
         elif category == "history":
-            # Check for date format consistency
-            date_patterns = [
-                r'\b\d{1,2}/\d{1,2}/\d{2,4}\b',  # DD/MM/YYYY
-                r'\b\d{1,2}-\d{1,2}-\d{2,4}\b',  # DD-MM-YYYY
-            ]
-            for pattern in date_patterns:
-                if re.search(pattern, question) or re.search(pattern, answer):
-                    issues.append(ValidationIssue(
-                        ValidationSeverity.WARNING,
-                        "Use full year format for dates (YYYY)"
-                    ))
+            # Validate date formats
+            if re.search(r'\b\d{1,2}/\d{1,2}/\d{2,4}\b', question):
+                issues.append(ValidationIssue(
+                    ValidationSeverity.ERROR,
+                    "Use year only for historical dates unless month is crucial"
+                ))
 
         elif category == "geography":
-            # Check for proper place name capitalization in answer
-            if answer != answer.title() and len(answer.split()) == 1:
+            # Validate place names
+            if any(word.islower() and len(word) > 3 for word in answer.split()):
+                issues.append(ValidationIssue(
+                    ValidationSeverity.ERROR,
+                    "Geographic names should be properly capitalized"
+                ))
+
+        elif category == "entertainment":
+            # Validate movie/show titles
+            if '"' in question and '"' not in answer and len(answer.split()) == 1:
                 issues.append(ValidationIssue(
                     ValidationSeverity.WARNING,
-                    "Geographic names should be capitalized"
+                    "Consider including full title for movies/shows"
+                ))
+
+        elif category == "sports":
+            # Validate sports terminology
+            if re.search(r'\b(match|game|competition)\b', question) and not re.search(r'\b(in|at|during)\b', question):
+                issues.append(ValidationIssue(
+                    ValidationSeverity.WARNING,
+                    "Specify the context for sports events"
                 ))

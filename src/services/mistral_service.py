@@ -13,10 +13,8 @@ from utils.answer_normalizer import AnswerNormalizer, create_answer_variants
 
 logger = logging.getLogger(__name__)
 
-
 class TokenBucket:
     """Token bucket rate limiter implementation."""
-
     def __init__(self, tokens_per_second: float, max_tokens: int):
         self.tokens_per_second = tokens_per_second
         self.max_tokens = max_tokens
@@ -40,7 +38,6 @@ class TokenBucket:
 
             self.tokens -= 1
             self.last_update = time.time()
-
 
 class MistralService:
     """Service for generating quiz questions using Mistral AI."""
@@ -67,149 +64,149 @@ class MistralService:
         self.validator = QuestionValidator()
         self.normalizer = AnswerNormalizer()
 
-        # Categories with specific descriptions and rules
+        # Updated categories with more variety and better examples
         self.categories = [
             {
-                "name": "science",
-                "description": "Scientific concepts, discoveries, and phenomena across physics, chemistry, biology, and space.",
+                "name": "geography",
+                "description": "World geography, capitals, landmarks, and natural features",
                 "rules": [
-                    "Use metric units only",
-                    "Use full element names, not symbols",
-                    "Cover diverse scientific fields",
-                    "Include modern discoveries and breakthroughs",
-                    "Focus on fascinating phenomena and concepts"
+                    "Include specific locations and measurements",
+                    "Mix physical and political geography",
+                    "Cover all continents and regions",
+                    "Include both natural and man-made features",
+                    "Use official names for countries and cities"
                 ],
                 "examples": [
                     {
-                        "question": "Which element makes up 78% of Earth's atmosphere?",
-                        "answer": "Nitrogen",
-                        "fun_fact": "Despite being so abundant, nitrogen remained undiscovered until 1772 because it's colorless, odorless, and doesn't react easily with other elements."
+                        "question": "What's the smallest country in the world?",
+                        "answer": "Vatican City",
+                        "fun_fact": "Vatican City is only 0.44 square kilometers in size."
                     }
                 ]
             },
             {
                 "name": "history",
-                "description": "Historical events, figures, and cultural developments across different civilizations and eras.",
+                "description": "Historical events, dates, figures, and civilizations",
                 "rules": [
-                    "Cover diverse time periods and cultures",
-                    "Include ancient to modern history",
-                    "Focus on significant turning points",
-                    "Highlight lesser-known but fascinating facts",
-                    "Include cultural and social history"
+                    "Include specific dates for major events",
+                    "Cover different time periods and cultures",
+                    "Focus on significant historical moments",
+                    "Include both ancient and modern history",
+                    "Use commonly accepted historical facts"
                 ],
                 "examples": [
                     {
-                        "question": "Which ancient wonder stood in Alexandria, Egypt?",
-                        "answer": "Lighthouse",
-                        "fun_fact": "The Lighthouse of Alexandria stood over 300 feet tall and used mirrors to reflect sunlight, visible from up to 34 miles away."
+                        "question": "In what year did World War II end?",
+                        "answer": "1945",
+                        "fun_fact": "The official surrender ceremony lasted 23 minutes on the USS Missouri."
                     }
                 ]
             },
             {
-                "name": "geography",
-                "description": "World geography, natural wonders, cities, and cultural landmarks.",
+                "name": "science",
+                "description": "Scientific facts, discoveries, and natural phenomena",
                 "rules": [
-                    "Mix physical and cultural geography",
-                    "Include natural wonders and phenomena",
-                    "Cover all continents and regions",
-                    "Include interesting geographical features",
-                    "Mix modern and historical geography"
+                    "Use metric units for measurements",
+                    "Include specific numbers and facts",
+                    "Cover various scientific fields",
+                    "Focus on verified scientific facts",
+                    "Include interesting scientific phenomena"
                 ],
                 "examples": [
                     {
-                        "question": "Which desert covers most of northern Africa?",
-                        "answer": "Sahara",
-                        "fun_fact": "The Sahara alternates between being a desert and a green savannah every 20,000 years due to Earth's axis wobble."
+                        "question": "How many bones does an adult human have?",
+                        "answer": "206",
+                        "fun_fact": "Babies are born with about 300 bones, some of which fuse together as they grow."
+                    }
+                ]
+            },
+            {
+                "name": "arts",
+                "description": "Art, literature, music, and cultural achievements",
+                "rules": [
+                    "Include specific artists and works",
+                    "Cover different art forms",
+                    "Mix classical and modern art",
+                    "Include international artists",
+                    "Focus on significant works"
+                ],
+                "examples": [
+                    {
+                        "question": "Who painted The Starry Night?",
+                        "answer": "Van Gogh",
+                        "fun_fact": "Van Gogh painted The Starry Night while in an asylum in Saint-Rémy-de-Provence."
                     }
                 ]
             },
             {
                 "name": "entertainment",
-                "description": "Movies, TV shows, actors, directors, and memorable moments in film and television.",
+                "description": "Movies, TV shows, celebrities, and popular culture",
                 "rules": [
+                    "Include specific titles and dates",
                     "Cover different genres and eras",
-                    "Include international cinema",
-                    "Focus on significant achievements",
-                    "Include interesting production facts",
-                    "Mix classic and modern content"
+                    "Mix mainstream and classic content",
+                    "Include international entertainment",
+                    "Focus on verified facts"
                 ],
                 "examples": [
                     {
-                        "question": "Who directed Jurassic Park?",
-                        "answer": "Spielberg",
-                        "fun_fact": "The T-Rex roar in Jurassic Park was created by mixing sounds from tigers, elephants, and alligators."
-                    }
-                ]
-            },
-            {
-                "name": "music",
-                "description": "Music across all genres, artists, albums, and musical history.",
-                "rules": [
-                    "Cover multiple genres and eras",
-                    "Include international music",
-                    "Mix mainstream and influential underground",
-                    "Include interesting music history",
-                    "Cover instruments and terminology"
-                ],
-                "examples": [
-                    {
-                        "question": "Which band released Dark Side of the Moon?",
-                        "answer": "Pink Floyd",
-                        "fun_fact": "Dark Side of the Moon spent a record-breaking 937 weeks on Billboard's top 200 albums chart."
-                    }
-                ]
-            },
-            {
-                "name": "pop_culture",
-                "description": "Contemporary culture, trends, social media, gaming, and modern phenomena.",
-                "rules": [
-                    "Focus on significant cultural moments",
-                    "Include digital and gaming culture",
-                    "Cover viral phenomena and trends",
-                    "Include social media milestones",
-                    "Mix entertainment and technology"
-                ],
-                "examples": [
-                    {
-                        "question": "Which game introduced Mario in 1981?",
-                        "answer": "Donkey Kong",
-                        "fun_fact": "Mario was named after Nintendo's warehouse landlord Mario Segale, and was originally called Jumpman."
+                        "question": "What's the highest-grossing film of all time?",
+                        "answer": "Avatar",
+                        "fun_fact": "Avatar took 15 years to make due to waiting for technology to catch up with Cameron's vision."
                     }
                 ]
             },
             {
                 "name": "sports",
-                "description": "Sports history, achievements, athletes, and memorable moments.",
+                "description": "Sports history, rules, records, and athletes",
                 "rules": [
-                    "Cover multiple sports and eras",
+                    "Include specific records and dates",
+                    "Cover different sports",
+                    "Mix team and individual sports",
                     "Include international sports",
-                    "Focus on significant achievements",
-                    "Include Olympic history",
-                    "Mix team and individual sports"
+                    "Focus on major achievements"
                 ],
                 "examples": [
                     {
-                        "question": "Which country invented basketball?",
-                        "answer": "Canada",
-                        "fun_fact": "Basketball was invented by James Naismith in 1891 while teaching at the YMCA Training School in Massachusetts."
+                        "question": "How high is a regulation NBA basket?",
+                        "answer": "10 feet",
+                        "fun_fact": "The 10-foot height was established in 1891 and hasn't changed since."
                     }
                 ]
             },
             {
-                "name": "technology",
-                "description": "Tech innovations, companies, inventors, and digital milestones.",
+                "name": "food_drink",
+                "description": "Cuisine, beverages, and food culture worldwide",
                 "rules": [
-                    "Cover different tech domains",
-                    "Include historical innovations",
-                    "Focus on breakthrough moments",
-                    "Include interesting development stories",
-                    "Mix hardware and software topics"
+                    "Include specific ingredients and origins",
+                    "Cover different cuisines",
+                    "Mix traditional and modern food",
+                    "Include cooking techniques",
+                    "Focus on cultural significance"
                 ],
                 "examples": [
                     {
-                        "question": "Who created Linux?",
-                        "answer": "Linus Torvalds",
-                        "fun_fact": "Linux was originally just a hobby project, and Torvalds thought it would never support anything bigger than an AT hard disk."
+                        "question": "Which country drinks the most coffee per capita?",
+                        "answer": "Finland",
+                        "fun_fact": "The average Finn consumes about 12 kg of coffee per year."
+                    }
+                ]
+            },
+            {
+                "name": "nature",
+                "description": "Animals, plants, and natural phenomena",
+                "rules": [
+                    "Include specific species and facts",
+                    "Cover different ecosystems",
+                    "Mix common and unusual species",
+                    "Include biological facts",
+                    "Focus on unique characteristics"
+                ],
+                "examples": [
+                    {
+                        "question": "What is the fastest bird in the world?",
+                        "answer": "Peregrine Falcon",
+                        "fun_fact": "The Peregrine Falcon can reach speeds over 380 km/h during its hunting dive."
                     }
                 ]
             }
@@ -221,39 +218,37 @@ class MistralService:
     def _get_question_generation_prompt(self, category: Dict) -> List[Dict]:
         """Get the improved prompt for question generation."""
         base_prompt = (
-            "You are a trivia question generator specializing in creating clear, unambiguous, and educational questions. "
-            f"Generate engaging trivia questions in the category: {category['name']}.\n\n"
-            f"Category focus: {category['description']}\n\n"
-            "OUTPUT FORMAT:\n"
-            "Generate questions in this exact format:\n"
-            "1. [Question]?\nAnswer: [1-3 word answer]\nFun Fact: [interesting fact]\n\n"
+            "You are a trivia question generator specializing in creating clear, engaging questions. "
+            f"Generate trivia questions in the category: {category['name']}.\n\n"
+            "QUESTION CHARACTERISTICS:\n"
+            "1. Direct and concise (e.g., 'What is the capital of France?' not 'Which city serves as the capital of the nation of France?')\n"
+            "2. Single, clear answer (e.g., 'Who painted the Mona Lisa?' not 'Which Renaissance artist is known for...')\n"
+            "3. Mix of easy, medium, and hard difficulty\n"
+            "4. Include specific dates, numbers, or facts when relevant\n"
+            "5. Avoid subjective terms ('best', 'greatest', 'most famous')\n\n"
             "ANSWER REQUIREMENTS:\n"
-            "1. Answers must be 1-3 words maximum\n"
-            "2. Answers should be specific and concrete (e.g., 'Napoleon' not 'a French emperor')\n"
+            "1. Must be 1-3 words\n"
+            "2. For numbers, use digits (e.g., '42' not 'forty-two')\n"
             "3. For dates, use year only unless month is crucial\n"
-            "4. For measurements, use metric units\n"
-            "5. For chemical elements, use full name not symbol\n"
-            "6. For people, either full name or commonly known surname\n\n"
-            "QUESTION STRUCTURE RULES:\n"
-            "1. Start with WHO, WHAT, WHERE, WHEN, WHICH, or IN WHAT\n"
-            "2. Maximum 15 words per question\n"
-            "3. Must be answerable with a single, specific answer\n"
-            "4. Must end with a question mark\n"
-            "5. Must not contain multiple clauses or conjunctions\n\n"
-            "CONTENT RULES:\n"
-            "1. Focus on factual, verifiable information\n"
-            "2. Avoid subjective terms ('best', 'most famous', 'greatest')\n"
-            "3. Avoid relative time references ('recent', 'modern', 'current')\n"
-            "4. Include specific details that make the answer unambiguous\n"
-            "5. Fun facts should provide additional context, not repeat the question\n\n"
+            "4. For measurements, include units (e.g., '10 feet')\n\n"
+            "FORMAT EXAMPLES:\n"
+            "- What is the highest mountain in Europe? (Answer: Mount Elbrus)\n"
+            "- How many dots appear on a pair of dice? (Answer: 42)\n"
+            "- Which planet is closest to the sun? (Answer: Mercury)\n"
+            "- In what year was the United Nations established? (Answer: 1945)\n"
+            "- What colors are on the flag of Sweden? (Answer: blue yellow)\n\n"
+            "PROHIBITED ELEMENTS:\n"
+            "1. No relative time references ('recent', 'modern', 'current', 'new')\n"
+            "2. No subjective qualifiers ('best', 'greatest', 'most famous')\n"
+            "3. No multiple-choice or true/false questions\n"
+            "4. No compound questions (using 'and' or 'or')\n"
+            "5. No questions requiring multiple answers\n\n"
         )
-
-        category_specific = self._get_category_specific_prompt(category)
 
         return [
             {
                 "role": "system",
-                "content": base_prompt + category_specific
+                "content": base_prompt + self._get_category_specific_prompt(category)
             },
             {
                 "role": "assistant",
@@ -266,25 +261,206 @@ class MistralService:
         ]
 
     def _get_category_specific_prompt(self, category: Dict) -> str:
-        """Generate category-specific prompt additions."""
+        """Generate category-specific prompt additions with improved specificity."""
         return f"""
-CATEGORY: {category['name'].upper()}
-FOCUS: {category['description']}
+CATEGORY GUIDELINES FOR {category['name'].upper()}:
+Description: {category['description']}
 
-SPECIFIC RULES FOR THIS CATEGORY:
+SPECIFIC RULES:
 {chr(10).join(f"- {rule}" for rule in category['rules'])}
 
-EXAMPLE FOR THIS CATEGORY:
-Question: "{category['examples'][0]['question']}"
-Answer: "{category['examples'][0]['answer']}"
+EXAMPLE QUESTION:
+Q: "{category['examples'][0]['question']}"
+A: "{category['examples'][0]['answer']}"
 Fun Fact: "{category['examples'][0]['fun_fact']}"
 
-Remember:
-1. Questions must be unambiguous
-2. Answers must be specific
-3. Fun facts should provide new information
+KEY REQUIREMENTS:
+1. Questions must have unambiguous, verifiable answers
+2. Answers must be widely accepted facts
+3. Fun facts should provide additional context not mentioned in the question
+4. Include specific dates, measurements, or numbers when relevant
+5. Focus on interesting but not obscure information
 """
 
+    async def _parse_response(self, content: str) -> List[Dict]:
+        """Parse and clean the API response with improved handling."""
+        questions = []
+        
+        # Split by question pattern
+        question_blocks = re.split(r'\d+\.|\n{2,}', content)
+        
+        for block in question_blocks:
+            block = block.strip()
+            if not block:
+                continue
+                
+            try:
+                # Look for question-answer-fun fact pattern
+                matches = re.match(
+                    r'(?:Q:)?\s*(.+?)\s*(?:A:|Answer:)\s*(.+?)\s*(?:Fun Fact:|$)(.*)',
+                    block,
+                    re.DOTALL | re.IGNORECASE
+                )
+                
+                if matches:
+                    question, answer, fun_fact = matches.groups()
+                    
+                    # Clean up the extracted parts
+                    question = question.strip().rstrip('?') + '?'
+                    answer = answer.strip()
+                    fun_fact = fun_fact.strip() if fun_fact else ""
+                    
+                    # Basic validation
+                    if question and answer:
+                        questions.append({
+                            "question": question,
+                            "answer": answer,
+                            "fun_fact": fun_fact or f"Related to {question.lower().replace('?', '')}"
+                        })
+                
+            except Exception as e:
+                logger.warning(f"Failed to parse question block: {block[:100]}... Error: {str(e)}")
+                continue
+                
+        return questions
+    
+    def _validate_and_clean_question(self, question_data: Dict) -> Optional[Dict]:
+        """Validate and clean a question before adding to database."""
+        try:
+            # Basic structure validation
+            if not all(k in question_data for k in ['question', 'answer', 'fun_fact']):
+                return None
+
+            question = question_data['question'].strip()
+            answer = question_data['answer'].strip()
+            fun_fact = question_data['fun_fact'].strip()
+
+            # Question format validation
+            if not question.endswith('?'):
+                question += '?'
+            
+            # Answer format validation
+            answer = re.sub(r'\s+', ' ', answer)  # Normalize whitespace
+            
+            # Fun fact validation - ensure it's not empty and different from question
+            if not fun_fact or fun_fact.lower() in question.lower():
+                fun_fact = f"Additional information about {answer}"
+
+            # Return cleaned data
+            return {
+                "question": question,
+                "answer": answer,
+                "fun_fact": fun_fact,
+                "category": question_data.get('category', 'general'),
+                "difficulty": question_data.get('difficulty', 2)
+            }
+            
+        except Exception as e:
+            logger.warning(f"Question validation failed: {str(e)}")
+            return None
+
+    async def _generate_batch(self, count: int) -> List[Dict[str, str]]:
+        """Generate a batch of questions with balanced categories."""
+        valid_questions = []
+        questions_per_category = max(2, count // len(self.categories))
+        
+        # Shuffle categories for variety
+        categories = list(self.categories)
+        random.shuffle(categories)
+        
+        for category in categories:
+            if len(valid_questions) >= count:
+                break
+                
+            category_questions = []
+            for attempt in range(self.max_retries):
+                try:
+                    await self.rate_limiter.acquire()
+                    messages = self._get_question_generation_prompt(category)
+                    
+                    async with httpx.AsyncClient() as client:
+                        response = await client.post(
+                            self.api_url,
+                            headers=self.headers,
+                            json={
+                                "model": self.default_model,
+                                "messages": messages,
+                                "temperature": 0.8,
+                                "max_tokens": 1000,
+                                "top_p": 0.9
+                            },
+                            timeout=self.default_timeout
+                        )
+
+                        if response.status_code != 200:
+                            logger.error(f"Mistral API error: {response.text}")
+                            if attempt < self.max_retries - 1:
+                                await asyncio.sleep(self.base_retry_delay * (2 ** attempt))
+                            continue
+
+                        data = response.json()
+                        content = data['choices'][0]['message']['content']
+                        
+                        # Parse and validate questions
+                        questions = await self._parse_response(content)
+                        logger.info(f"Generated {len(questions)} questions for category: {category['name']}")
+                        
+                        for q in questions:
+                            try:
+                                # Validate the question
+                                validation_issues = self.validator.validate_question(q)
+                                errors = [i for i in validation_issues if i.severity == ValidationSeverity.ERROR]
+
+                                if errors:
+                                    logger.warning(f"Skipping invalid question due to: {errors}")
+                                    continue
+
+                                # Clean and normalize the question
+                                cleaned_question = self._validate_and_clean_question(q)
+                                if not cleaned_question:
+                                    continue
+
+                                # Add category and generate ID
+                                cleaned_question['category'] = category['name']
+                                cleaned_question['id'] = str(uuid.uuid4())
+                                
+                                # Add answer variants
+                                cleaned_question['answer'] = self.normalizer.normalize_answer(
+                                    cleaned_question['answer'],
+                                    category['name']
+                                )
+                                cleaned_question['answer_variants'] = create_answer_variants(
+                                    cleaned_question['answer']
+                                )
+
+                                # Check for duplicates
+                                is_duplicate = any(
+                                    vq['question'].lower() == cleaned_question['question'].lower() or 
+                                    vq['answer'].lower() == cleaned_question['answer'].lower()
+                                    for vq in valid_questions + category_questions
+                                )
+                                
+                                if not is_duplicate:
+                                    category_questions.append(cleaned_question)
+                                    if len(category_questions) >= questions_per_category:
+                                        break
+
+                            except Exception as e:
+                                logger.warning(f"Failed to process question: {str(e)}")
+                                continue
+
+                        if category_questions:
+                            valid_questions.extend(category_questions[:questions_per_category])
+                            break
+
+                except Exception as e:
+                    logger.error(f"Batch generation error: {str(e)}")
+                    if attempt < self.max_retries - 1:
+                        await asyncio.sleep(self.base_retry_delay * (2 ** attempt))
+                    continue
+
+        return valid_questions[:count]
+    
     async def start(self):
         """Start the service and ensure minimum questions available."""
         logger.info("Starting Mistral service...")
@@ -351,7 +527,7 @@ Remember:
             try:
                 async with self.reset_lock:
                     unused = await self.database.count_questions(unused_only=True)
-                    if unused < 15:
+                    if unused < self.min_questions:
                         logger.info(f"Generating more questions (currently {unused} unused)")
                         questions = await self._generate_batch(10)
                         if questions:
@@ -370,152 +546,26 @@ Remember:
                 logger.error(f"Error in question fill loop: {e}")
                 await asyncio.sleep(30)
 
-    async def _generate_batch(self, count: int) -> List[Dict[str, str]]:
-        """Generate a batch of questions with balanced categories."""
-        valid_questions = []
-        questions_per_category = max(2, count // len(self.categories))
-        
-        # Shuffle categories to randomize order
-        categories = list(self.categories)
-        random.shuffle(categories)
-        
-        # Try to get questions from each category
-        for category in categories:
-            if len(valid_questions) >= count:
-                break
-                
-            # Generate questions for this category
-            category_questions = []
-            messages = self._get_question_generation_prompt(category)
-            
-            for attempt in range(self.max_retries):
-                try:
-                    await self.rate_limiter.acquire()
-
-                    async with httpx.AsyncClient() as client:
-                        response = await client.post(
-                            self.api_url,
-                            headers=self.headers,
-                            json={
-                                "model": self.default_model,
-                                "messages": messages,
-                                "temperature": 0.8,  # Increased for more variety
-                                "max_tokens": 1000,
-                                "top_p": 0.9
-                            },
-                            timeout=self.default_timeout
-                        )
-
-                        if response.status_code != 200:
-                            error_msg = f"Mistral API error: {response.text}"
-                            logger.error(error_msg)
-                            if attempt == self.max_retries - 1:
-                                break
-                            continue
-
-                        data = response.json()
-                        content = data['choices'][0]['message']['content']
-
-                        # Clean and parse the response
-                        questions = self._parse_response(content)
-                        logger.info(f"Generated {len(questions)} questions for category: {category['name']}")
-                        
-                        for q in questions:
-                            try:
-                                # Validate the question
-                                validation_issues = self.validator.validate_question(q)
-                                errors = [i for i in validation_issues if i.severity == ValidationSeverity.ERROR]
-
-                                if errors:
-                                    logger.warning(f"Skipping invalid question due to: {errors}")
-                                    continue
-
-                                # Add category and normalize
-                                q['category'] = category['name']
-                                q = self._preprocess_question_answer(q)
-                                q['id'] = str(uuid.uuid4())
-                                logger.info(f"Processed question: {q['question']} (Answer: {q['answer']}, Category: {q['category']})")
-                                
-                                # Check for duplicates
-                                question_text = q['question'].lower()
-                                answer_text = q['answer'].lower()
-                                is_duplicate = any(
-                                    vq['question'].lower() == question_text or 
-                                    vq['answer'].lower() == answer_text
-                                    for vq in valid_questions
-                                )
-                                
-                                if not is_duplicate:
-                                    category_questions.append(q)
-                                    logger.info(f"Added valid question for category {category['name']}")
-                                    if len(category_questions) >= questions_per_category:
-                                        break
-                                else:
-                                    logger.info(f"Skipping duplicate question: {q['question']}")
-
-                            except ValueError as e:
-                                logger.warning(f"Skipping invalid question: {e}")
-                                
-                        if category_questions:
-                            valid_questions.extend(category_questions[:questions_per_category])
-                            break
-
-                except (httpx.TimeoutException, httpx.RequestError) as e:
-                    error_msg = f"Mistral API request failed: {e}"
-                    logger.error(error_msg)
-                    if attempt == self.max_retries - 1:
-                        break
-
-                delay = self.base_retry_delay * (2 ** attempt) + (random.random() * 0.5)
-                logger.info(f"Retrying in {delay:.2f} seconds...")
-                await asyncio.sleep(delay)
-                
-        return valid_questions[:count]
-
-    def _parse_response(self, content: str) -> List[Dict]:
-        """Parse and clean the API response."""
-        content = content.strip()
-        questions = []
-        
-        # Split into individual questions (numbered format)
-        question_texts = re.split(r'\d+\.\s+', content)[1:]  # Skip empty first split
-        
-        for text in question_texts:
-            try:
-                # Extract question, answer, and fun fact
-                match = re.match(
-                    r'(.*?)\s*Answer:\s*(.*?)\s*Fun Fact:\s*(.*?)(?:\s*\d+\.|$)',
-                    text.strip(),
-                    re.DOTALL
-                )
-                
-                if match:
-                    question, answer, fun_fact = match.groups()
-                    questions.append({
-                        "question": question.strip(),
-                        "answer": answer.strip(),
-                        "fun_fact": fun_fact.strip()
-                    })
-                    
-            except Exception as e:
-                logger.warning(f"Failed to parse question: {text}")
-                continue
-                
-        return questions
-
     def _preprocess_question_answer(self, question_data: Dict) -> Dict:
         """Preprocess and normalize question/answer data."""
-        category = question_data.get('category', 'general')
-
-        # Normalize the answer
-        question_data['answer'] = self.normalizer.normalize_answer(
-            question_data['answer'],
-            category
-        )
-
+        # Normalize answer format
+        answer = question_data['answer'].strip().lower()
+        
+        # Handle numerical answers
+        if answer.replace('.', '').isdigit():
+            answer = '{:,}'.format(float(answer))
+        
+        # Handle multiple word answers
+        answer = ' '.join(answer.split())
+        
+        # Add category and difficulty if not present
+        question_data['category'] = question_data.get('category', 'general')
+        question_data['difficulty'] = question_data.get('difficulty', 2)
+        
+        # Update the answer
+        question_data['answer'] = answer
+        
         # Generate answer variants
-        question_data['answer_variants'] = create_answer_variants(
-            question_data['answer']
-        )
-
+        question_data['answer_variants'] = create_answer_variants(answer)
+        
         return question_data
