@@ -71,73 +71,145 @@ class MistralService:
         self.categories = [
             {
                 "name": "science",
-                "description": "Focus on fundamental scientific concepts, discoveries, and scientists.",
+                "description": "Scientific concepts, discoveries, and phenomena across physics, chemistry, biology, and space.",
                 "rules": [
                     "Use metric units only",
                     "Use full element names, not symbols",
-                    "Include specific measurements where relevant",
-                    "Use precise scientific terminology",
-                    "Avoid theoretical or disputed concepts"
+                    "Cover diverse scientific fields",
+                    "Include modern discoveries and breakthroughs",
+                    "Focus on fascinating phenomena and concepts"
                 ],
                 "examples": [
                     {
-                        "question": "What is the atomic number of carbon?",
-                        "answer": "6",
-                        "fun_fact": "Carbon forms the basis for all known life forms due to its ability to form multiple stable covalent bonds."
+                        "question": "Which element makes up 78% of Earth's atmosphere?",
+                        "answer": "Nitrogen",
+                        "fun_fact": "Despite being so abundant, nitrogen remained undiscovered until 1772 because it's colorless, odorless, and doesn't react easily with other elements."
                     }
                 ]
             },
             {
                 "name": "history",
-                "description": "Major historical events, figures, and discoveries.",
+                "description": "Historical events, figures, and cultural developments across different civilizations and eras.",
                 "rules": [
-                    "Use full years (YYYY format)",
-                    "Specify BCE/CE for dates before 1000 CE",
-                    "Use commonly known names for historical figures",
-                    "Focus on verified historical facts",
-                    "Include geographical context when relevant"
+                    "Cover diverse time periods and cultures",
+                    "Include ancient to modern history",
+                    "Focus on significant turning points",
+                    "Highlight lesser-known but fascinating facts",
+                    "Include cultural and social history"
                 ],
                 "examples": [
                     {
-                        "question": "In what year did Christopher Columbus reach America?",
-                        "answer": "1492",
-                        "fun_fact": "Columbus never realized he had discovered a new continent, believing until his death that he had reached Asia."
+                        "question": "Which ancient wonder stood in Alexandria, Egypt?",
+                        "answer": "Lighthouse",
+                        "fun_fact": "The Lighthouse of Alexandria stood over 300 feet tall and used mirrors to reflect sunlight, visible from up to 34 miles away."
                     }
                 ]
             },
             {
                 "name": "geography",
-                "description": "Physical geography, countries, capitals, and landmarks.",
+                "description": "World geography, natural wonders, cities, and cultural landmarks.",
                 "rules": [
-                    "Use current, officially recognized names",
-                    "Include continent/region for lesser-known locations",
-                    "Use metric measurements for distances/heights",
-                    "Focus on permanent geographical features",
-                    "Use proper capitalization for place names"
+                    "Mix physical and cultural geography",
+                    "Include natural wonders and phenomena",
+                    "Cover all continents and regions",
+                    "Include interesting geographical features",
+                    "Mix modern and historical geography"
                 ],
                 "examples": [
                     {
-                        "question": "Which African country has Cairo as its capital?",
-                        "answer": "Egypt",
-                        "fun_fact": "Cairo is the largest city in the Arab world, with over 20 million people in its metropolitan area."
+                        "question": "Which desert covers most of northern Africa?",
+                        "answer": "Sahara",
+                        "fun_fact": "The Sahara alternates between being a desert and a green savannah every 20,000 years due to Earth's axis wobble."
+                    }
+                ]
+            },
+            {
+                "name": "entertainment",
+                "description": "Movies, TV shows, actors, directors, and memorable moments in film and television.",
+                "rules": [
+                    "Cover different genres and eras",
+                    "Include international cinema",
+                    "Focus on significant achievements",
+                    "Include interesting production facts",
+                    "Mix classic and modern content"
+                ],
+                "examples": [
+                    {
+                        "question": "Who directed Jurassic Park?",
+                        "answer": "Spielberg",
+                        "fun_fact": "The T-Rex roar in Jurassic Park was created by mixing sounds from tigers, elephants, and alligators."
                     }
                 ]
             },
             {
                 "name": "music",
-                "description": "Classical and popular music, instruments, and theory.",
+                "description": "Music across all genres, artists, albums, and musical history.",
                 "rules": [
-                    "Use commonly known artist/band names",
-                    "Include years for historical references",
-                    "Specify music genres where relevant",
-                    "Focus on significant achievements/works",
-                    "Use standard musical terminology"
+                    "Cover multiple genres and eras",
+                    "Include international music",
+                    "Mix mainstream and influential underground",
+                    "Include interesting music history",
+                    "Cover instruments and terminology"
                 ],
                 "examples": [
                     {
-                        "question": "Which composer wrote The Four Seasons?",
-                        "answer": "Vivaldi",
-                        "fun_fact": "Each concerto in The Four Seasons is accompanied by a sonnet, possibly written by Vivaldi himself."
+                        "question": "Which band released Dark Side of the Moon?",
+                        "answer": "Pink Floyd",
+                        "fun_fact": "Dark Side of the Moon spent a record-breaking 937 weeks on Billboard's top 200 albums chart."
+                    }
+                ]
+            },
+            {
+                "name": "pop_culture",
+                "description": "Contemporary culture, trends, social media, gaming, and modern phenomena.",
+                "rules": [
+                    "Focus on significant cultural moments",
+                    "Include digital and gaming culture",
+                    "Cover viral phenomena and trends",
+                    "Include social media milestones",
+                    "Mix entertainment and technology"
+                ],
+                "examples": [
+                    {
+                        "question": "Which game introduced Mario in 1981?",
+                        "answer": "Donkey Kong",
+                        "fun_fact": "Mario was named after Nintendo's warehouse landlord Mario Segale, and was originally called Jumpman."
+                    }
+                ]
+            },
+            {
+                "name": "sports",
+                "description": "Sports history, achievements, athletes, and memorable moments.",
+                "rules": [
+                    "Cover multiple sports and eras",
+                    "Include international sports",
+                    "Focus on significant achievements",
+                    "Include Olympic history",
+                    "Mix team and individual sports"
+                ],
+                "examples": [
+                    {
+                        "question": "Which country invented basketball?",
+                        "answer": "Canada",
+                        "fun_fact": "Basketball was invented by James Naismith in 1891 while teaching at the YMCA Training School in Massachusetts."
+                    }
+                ]
+            },
+            {
+                "name": "technology",
+                "description": "Tech innovations, companies, inventors, and digital milestones.",
+                "rules": [
+                    "Cover different tech domains",
+                    "Include historical innovations",
+                    "Focus on breakthrough moments",
+                    "Include interesting development stories",
+                    "Mix hardware and software topics"
+                ],
+                "examples": [
+                    {
+                        "question": "Who created Linux?",
+                        "answer": "Linus Torvalds",
+                        "fun_fact": "Linux was originally just a hobby project, and Torvalds thought it would never support anything bigger than an AT hard disk."
                     }
                 ]
             }
@@ -152,7 +224,10 @@ class MistralService:
             "You are a trivia question generator specializing in creating clear, unambiguous, and educational questions. "
             f"Generate engaging trivia questions in the category: {category['name']}.\n\n"
             f"Category focus: {category['description']}\n\n"
-            "ANSWER FORMAT REQUIREMENTS:\n"
+            "OUTPUT FORMAT:\n"
+            "Generate questions in this exact format:\n"
+            "1. [Question]?\nAnswer: [1-3 word answer]\nFun Fact: [interesting fact]\n\n"
+            "ANSWER REQUIREMENTS:\n"
             "1. Answers must be 1-3 words maximum\n"
             "2. Answers should be specific and concrete (e.g., 'Napoleon' not 'a French emperor')\n"
             "3. For dates, use year only unless month is crucial\n"
@@ -186,7 +261,7 @@ class MistralService:
             },
             {
                 "role": "user",
-                "content": f"Generate high-quality {category['name']} questions following the rules exactly."
+                "content": f"Generate 5 high-quality {category['name']} questions following the format and rules exactly."
             }
         ]
 
@@ -296,109 +371,137 @@ Remember:
                 await asyncio.sleep(30)
 
     async def _generate_batch(self, count: int) -> List[Dict[str, str]]:
-        """Generate a batch of questions."""
-        # Select a random category for this batch
-        category = random.choice(self.categories)
-        messages = self._get_question_generation_prompt(category)
+        """Generate a batch of questions with balanced categories."""
+        valid_questions = []
+        questions_per_category = max(2, count // len(self.categories))
+        
+        # Shuffle categories to randomize order
+        categories = list(self.categories)
+        random.shuffle(categories)
+        
+        # Try to get questions from each category
+        for category in categories:
+            if len(valid_questions) >= count:
+                break
+                
+            # Generate questions for this category
+            category_questions = []
+            messages = self._get_question_generation_prompt(category)
+            
+            for attempt in range(self.max_retries):
+                try:
+                    await self.rate_limiter.acquire()
 
-        for attempt in range(self.max_retries):
-            try:
-                await self.rate_limiter.acquire()
+                    async with httpx.AsyncClient() as client:
+                        response = await client.post(
+                            self.api_url,
+                            headers=self.headers,
+                            json={
+                                "model": self.default_model,
+                                "messages": messages,
+                                "temperature": 0.8,  # Increased for more variety
+                                "max_tokens": 1000,
+                                "top_p": 0.9
+                            },
+                            timeout=self.default_timeout
+                        )
 
-                async with httpx.AsyncClient() as client:
-                    response = await client.post(
-                        self.api_url,
-                        headers=self.headers,
-                        json={
-                            "model": self.default_model,
-                            "messages": messages,
-                            "temperature": 0.7,
-                            "max_tokens": 1000,
-                            "top_p": 0.9
-                        },
-                        timeout=self.default_timeout
-                    )
+                        if response.status_code != 200:
+                            error_msg = f"Mistral API error: {response.text}"
+                            logger.error(error_msg)
+                            if attempt == self.max_retries - 1:
+                                break
+                            continue
 
-                    if response.status_code != 200:
-                        error_msg = f"Mistral API error: {response.text}"
-                        logger.error(error_msg)
-                        if attempt == self.max_retries - 1:
-                            raise Exception(error_msg)
-                        continue
+                        data = response.json()
+                        content = data['choices'][0]['message']['content']
 
-                    data = response.json()
-                    content = data['choices'][0]['message']['content']
+                        # Clean and parse the response
+                        questions = self._parse_response(content)
+                        logger.info(f"Generated {len(questions)} questions for category: {category['name']}")
+                        
+                        for q in questions:
+                            try:
+                                # Validate the question
+                                validation_issues = self.validator.validate_question(q)
+                                errors = [i for i in validation_issues if i.severity == ValidationSeverity.ERROR]
 
-                    # Clean and parse the response
-                    questions = self._parse_response(content)
-                    valid_questions = []
+                                if errors:
+                                    logger.warning(f"Skipping invalid question due to: {errors}")
+                                    continue
 
-                    for q in questions:
-                        try:
-                            # Validate the question
-                            validation_issues = self.validator.validate_question(q)
-                            errors = [i for i in validation_issues if i.severity == ValidationSeverity.ERROR]
+                                # Add category and normalize
+                                q['category'] = category['name']
+                                q = self._preprocess_question_answer(q)
+                                q['id'] = str(uuid.uuid4())
+                                logger.info(f"Processed question: {q['question']} (Answer: {q['answer']}, Category: {q['category']})")
+                                
+                                # Check for duplicates
+                                question_text = q['question'].lower()
+                                answer_text = q['answer'].lower()
+                                is_duplicate = any(
+                                    vq['question'].lower() == question_text or 
+                                    vq['answer'].lower() == answer_text
+                                    for vq in valid_questions
+                                )
+                                
+                                if not is_duplicate:
+                                    category_questions.append(q)
+                                    logger.info(f"Added valid question for category {category['name']}")
+                                    if len(category_questions) >= questions_per_category:
+                                        break
+                                else:
+                                    logger.info(f"Skipping duplicate question: {q['question']}")
 
-                            if errors:
-                                logger.warning(f"Skipping invalid question due to: {errors}")
-                                continue
+                            except ValueError as e:
+                                logger.warning(f"Skipping invalid question: {e}")
+                                
+                        if category_questions:
+                            valid_questions.extend(category_questions[:questions_per_category])
+                            break
 
-                            # Normalize the answer
-                            q = self._preprocess_question_answer(q)
+                except (httpx.TimeoutException, httpx.RequestError) as e:
+                    error_msg = f"Mistral API request failed: {e}"
+                    logger.error(error_msg)
+                    if attempt == self.max_retries - 1:
+                        break
 
-                            # Add unique ID
-                            q['id'] = str(uuid.uuid4())
-                            valid_questions.append(q)
-
-                        except ValueError as e:
-                            logger.warning(f"Skipping invalid question: {e}")
-
-                    return valid_questions
-
-            except (httpx.TimeoutException, httpx.RequestError) as e:
-                error_msg = f"Mistral API request failed: {e}"
-                logger.error(error_msg)
-                if attempt == self.max_retries - 1:
-                    raise Exception(error_msg)
-
-            delay = self.base_retry_delay * (2 ** attempt) + (random.random() * 0.5)
-            logger.info(f"Retrying in {delay:.2f} seconds...")
-            await asyncio.sleep(delay)
-
-        return []
+                delay = self.base_retry_delay * (2 ** attempt) + (random.random() * 0.5)
+                logger.info(f"Retrying in {delay:.2f} seconds...")
+                await asyncio.sleep(delay)
+                
+        return valid_questions[:count]
 
     def _parse_response(self, content: str) -> List[Dict]:
         """Parse and clean the API response."""
         content = content.strip()
-
-        # Remove comments (both // and /* */ style)
-        content = re.sub(r'//.*?(\n|$)', '', content)
-        content = re.sub(r'/\*.*?\*/', '', content, flags=re.DOTALL)
-
-        # Extract JSON array if embedded in other text
-        array_match = re.search(r'\[\s*{.*}\s*\]', content, re.DOTALL)
-        if array_match:
-            content = array_match.group(0)
-
-        # Fix common JSON formatting issues
-        content = re.sub(r',\s*}', '}', content)  # Remove trailing commas
-        content = re.sub(r',\s*]', ']', content)  # Remove trailing commas in arrays
-        content = re.sub(r'"\s*"([^"]+)"\s*"', r'"\1"', content)  # Fix double quoted values
-        content = re.sub(r'"\s*:\s*"([^"]+)"\s*([,}])', r'": "\1"\2', content)  # Fix value quoting
-        content = re.sub(r'([{,])\s*"?(\w+)"?\s*:', r'\1 "\2":', content)  # Fix key quoting
-
-        # Normalize whitespace
-        content = re.sub(r'\s+', ' ', content)
-
-        try:
-            questions = json.loads(content)
-            if not isinstance(questions, list):
-                questions = [questions]
-            return questions
-        except json.JSONDecodeError as e:
-            logger.error(f"JSON parse error: {e}")
-            logger.error(f"Content: {content}")
-            return []
+        questions = []
+        
+        # Split into individual questions (numbered format)
+        question_texts = re.split(r'\d+\.\s+', content)[1:]  # Skip empty first split
+        
+        for text in question_texts:
+            try:
+                # Extract question, answer, and fun fact
+                match = re.match(
+                    r'(.*?)\s*Answer:\s*(.*?)\s*Fun Fact:\s*(.*?)(?:\s*\d+\.|$)',
+                    text.strip(),
+                    re.DOTALL
+                )
+                
+                if match:
+                    question, answer, fun_fact = match.groups()
+                    questions.append({
+                        "question": question.strip(),
+                        "answer": answer.strip(),
+                        "fun_fact": fun_fact.strip()
+                    })
+                    
+            except Exception as e:
+                logger.warning(f"Failed to parse question: {text}")
+                continue
+                
+        return questions
 
     def _preprocess_question_answer(self, question_data: Dict) -> Dict:
         """Preprocess and normalize question/answer data."""

@@ -169,19 +169,50 @@ class Database:
             return added
             
     async def get_unused_question(self) -> Optional[Dict]:
-        """Get a random unused question and mark it as used."""
+        """Get a random unused question with category balancing."""
         async with self.SessionLocal() as session:
-            # Get random unused question, prioritizing questions that haven't been used recently
-            result = await session.execute(
-                select(Question)
-                .where(Question.used == False)
-                .order_by(
-                    Question.last_used.nulls_first(),
-                    func.random()
-                )
+            # First, get the least recently used category
+            category_result = await session.execute(
+                select(Question.category, func.max(Question.last_used))
+                .group_by(Question.category)
+                .order_by(func.max(Question.last_used).nulls_first())
                 .limit(1)
             )
-            question = result.scalar_one_or_none()
+            category_row = category_result.first()
+            
+            if category_row:
+                preferred_category = category_row[0]
+                
+                # Try to get a question from the preferred category first
+                result = await session.execute(
+                    select(Question)
+                    .where(
+                        Question.used == False,
+                        Question.category == preferred_category
+                    )
+                    .order_by(func.random())
+                    .limit(1)
+                )
+                question = result.scalar_one_or_none()
+                
+                # If no questions in preferred category, get any unused question
+                if not question:
+                    result = await session.execute(
+                        select(Question)
+                        .where(Question.used == False)
+                        .order_by(func.random())
+                        .limit(1)
+                    )
+                    question = result.scalar_one_or_none()
+            else:
+                # If no categories found, get any unused question
+                result = await session.execute(
+                    select(Question)
+                    .where(Question.used == False)
+                    .order_by(func.random())
+                    .limit(1)
+                )
+                question = result.scalar_one_or_none()
             
             if question:
                 # Mark as used and update timestamp
@@ -200,12 +231,12 @@ class Database:
             return None
             
     async def reset_used_questions(self):
-        """Reset all questions to unused state."""
+        """Reset questions state and clean up old/invalid questions."""
         async with self.SessionLocal() as session:
-            await session.execute(
-                text("UPDATE questions SET used = FALSE")
-            )
+            # First, delete all questions to start fresh
+            await session.execute(text("DELETE FROM questions"))
             await session.commit()
+            logger.info("Cleared all existing questions to ensure fresh content")
             
     async def count_questions(self, unused_only: bool = False) -> int:
         """Count total or unused questions in database."""
