@@ -18,7 +18,7 @@ class ValidationIssue:
 
 class QuestionValidator:
     def __init__(self):
-        # Valid question starters - expanded list
+        # Valid question starters
         self.valid_starters = {
             'what', 'which', 'who', 'where', 'when', 'how many',
             'how much', 'in what', 'on what', 'at what', 'why',
@@ -48,21 +48,34 @@ class QuestionValidator:
         self.relative_time_terms = {
             'recent', 'current', 'modern', 'new', 'latest', 'today',
             'now', 'contemporary', 'present', 'recently', 'upcoming',
-            'future', 'past', 'ancient'
+            'future', 'past'
         }
         
         # Valid multi-word prefixes for answers
         self.valid_prefixes = {
             'mount', 'lake', 'saint', 'new', 'north', 'south', 'east', 'west',
-            'prince', 'princess', 'king', 'queen', 'sir', 'lady', 'lord'
+            'prince', 'princess', 'king', 'queen', 'sir', 'lady', 'lord',
+            'cape', 'fort', 'port', 'san', 'santa', 'los', 'las', 'el', 'de'
         }
         
         # Valid units for numerical answers
         self.valid_units = {
             'feet', 'meters', 'kilometers', 'miles', 'kg', 'pounds',
             'celsius', 'fahrenheit', 'years', 'hours', 'minutes',
-            'seconds', 'degrees'
+            'seconds', 'degrees', 'square miles', 'square kilometers'
         }
+
+        # Common question patterns that should be avoided
+        self.problematic_patterns = [
+            (r'\b(and|or)\b', "Question contains conjunction suggesting multiple parts or choices"),
+            (r'\b(can|could|might|may)\b', "Question contains modal verb suggesting uncertainty"),
+            (r'\b(usually|sometimes|often|occasionally)\b', "Question contains frequency term suggesting ambiguity"),
+            (r'\b(probably|possibly|maybe)\b', "Question contains uncertainty term"),
+            (r'\b(etc|etc\.)\b', "Question contains 'etc' suggesting incomplete list"),
+            (r'\b(famous|well-known|popular)\b', "Question contains subjective popularity term"),
+            (r'\b(difficult|easy|hard|simple)\b', "Question contains subjective difficulty term"),
+            (r'\b(beautiful|pretty|ugly|nice)\b', "Question contains subjective aesthetic term")
+        ]
 
     def validate_question(self, data: Dict) -> List[ValidationIssue]:
         """Validate a question and return list of issues found."""
@@ -91,7 +104,8 @@ class QuestionValidator:
         answer = data.get("answer", "").lower().strip()
         fun_fact = data.get("fun_fact", "").lower().strip()
 
-        # Question format checks
+        # Remove trailing (? and other artifacts
+        question = re.sub(r'\s*\(\?\s*$', '', question)
         if not question.endswith("?"):
             issues.append(ValidationIssue(
                 ValidationSeverity.ERROR,
@@ -113,19 +127,18 @@ class QuestionValidator:
                 f"Question is too long ({len(words)} words, max 15)"
             ))
 
-        # Answer validation with special cases
+        # Answer validation
         answer_words = answer.split()
-        if len(answer_words) > 3:
-            # Check if it's a valid numerical answer with units
-            is_numerical = bool(re.match(r'^\d+(\.\d+)?\s+[a-z]+$', answer))
-            is_valid_unit = any(unit in answer for unit in self.valid_units)
-            has_valid_prefix = any(prefix in answer.lower() for prefix in self.valid_prefixes)
-            
-            if not (is_numerical and is_valid_unit) and not has_valid_prefix:
-                issues.append(ValidationIssue(
-                    ValidationSeverity.ERROR,
-                    f"Answer too long ({len(answer_words)} words, max 3)"
-                ))
+        is_numerical = bool(re.match(r'^\d+(\.\d+)?\s*[a-zA-Z]*$', answer))
+        has_valid_prefix = any(prefix in answer.lower() for prefix in self.valid_prefixes)
+        has_valid_unit = any(unit in answer.lower() for unit in self.valid_units)
+        
+        # Allow longer answers for specific cases
+        if len(answer_words) > 3 and not (is_numerical or has_valid_prefix or has_valid_unit):
+            issues.append(ValidationIssue(
+                ValidationSeverity.ERROR,
+                f"Answer too long ({len(answer_words)} words, max 3)"
+            ))
 
         # Check for multiple answer indicators
         for word in self.multiple_answer_indicators:
@@ -155,7 +168,7 @@ class QuestionValidator:
                 ))
 
         # Fun fact validation
-        if question in fun_fact or answer in fun_fact:
+        if question.lower() in fun_fact.lower() or answer.lower() in fun_fact.lower():
             issues.append(ValidationIssue(
                 ValidationSeverity.WARNING,
                 "Fun fact should not repeat question or answer verbatim"
@@ -167,6 +180,21 @@ class QuestionValidator:
                 "Fun fact should be more detailed"
             ))
 
+        # Don't allow fun facts that just say "Related to..."
+        if fun_fact.lower().startswith("related to"):
+            issues.append(ValidationIssue(
+                ValidationSeverity.ERROR,
+                "Fun fact must provide actual information"
+            ))
+
+        # Check for problematic patterns
+        for pattern, message in self.problematic_patterns:
+            if re.search(pattern, question):
+                issues.append(ValidationIssue(
+                    ValidationSeverity.WARNING,
+                    message
+                ))
+
         # Category-specific validation
         self._validate_category_specific(data, issues)
 
@@ -177,6 +205,7 @@ class QuestionValidator:
         category = data.get("category", "").lower()
         question = data.get("question", "").lower()
         answer = data.get("answer", "").lower()
+        fun_fact = data.get("fun_fact", "").lower()
 
         if category == "science":
             # Validate scientific answers
@@ -195,10 +224,22 @@ class QuestionValidator:
 
         elif category == "history":
             # Validate date formats
-            if re.search(r'\b\d{1,2}/\d{1,2}/\d{2,4}\b', question):
+            date_patterns = [
+                r'\b\d{1,2}/\d{1,2}/\d{2,4}\b',  # DD/MM/YYYY
+                r'\b\d{1,2}-\d{1,2}-\d{2,4}\b',  # DD-MM-YYYY
+            ]
+            for pattern in date_patterns:
+                if re.search(pattern, question) or re.search(pattern, answer):
+                    issues.append(ValidationIssue(
+                        ValidationSeverity.ERROR,
+                        "Use year only for historical dates unless month is crucial"
+                    ))
+
+            # Remove CE/BCE from answers
+            if "ce" in answer or "bce" in answer:
                 issues.append(ValidationIssue(
                     ValidationSeverity.ERROR,
-                    "Use year only for historical dates unless month is crucial"
+                    "Remove CE/BCE from year answers"
                 ))
 
         elif category == "geography":
@@ -224,3 +265,43 @@ class QuestionValidator:
                     ValidationSeverity.WARNING,
                     "Specify the context for sports events"
                 ))
+
+        elif category == "arts":
+            # Check for proper artist/work attribution
+            if "painted" in question or "composed" in question:
+                if len(answer.split()) == 1:
+                    issues.append(ValidationIssue(
+                        ValidationSeverity.WARNING,
+                        "Consider using full name for artists"
+                    ))
+
+    def create_answer_variants(self, answer: str) -> List[str]:
+        """Create variations of the answer for matching."""
+        variants = {answer.lower()}
+        
+        # Remove special characters and extra spaces
+        clean_answer = re.sub(r'[^\w\s]', '', answer.lower())
+        variants.add(clean_answer)
+        
+        # Handle numbers
+        if answer.replace(',', '').replace('.', '').isdigit():
+            num = int(float(answer.replace(',', '')))
+            variants.add(str(num))
+            variants.add(f"{num:,}")  # With commas
+            
+        # Common prefixes to try removing
+        prefixes = ['mount ', 'mt. ', 'mt ', 'saint ', 'st. ', 'lake ']
+        for prefix in prefixes:
+            if answer.lower().startswith(prefix):
+                variants.add(answer[len(prefix):])
+                
+        # Handle special cases
+        if ' and ' in answer:
+            variants.add(answer.replace(' and ', ' & '))
+            
+        if re.match(r'^\d+(?:st|nd|rd|th)', answer):
+            # Convert ordinal numbers (1st -> 1, 2nd -> 2)
+            base = re.match(r'^\d+', answer).group()
+            variants.add(base)
+            
+        return list(variants)
