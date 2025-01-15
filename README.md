@@ -125,15 +125,30 @@ Key configuration options in `.env`:
 ```
 quizbot_mansionnet/
 ├── src/
-│   ├── models/         # Data models
-│   ├── services/       # Core services
-│   ├── utils/          # Utility functions
-│   ├── bot.py         # Main bot class
-│   ├── config.py      # Configuration handling
-│   └── main.py        # Entry point
-├── tests/             # Test suite
-├── requirements.txt   # Dependencies
-└── setup.py          # Package setup
+│   ├── models/                   # Data models
+│   │   ├── __init__.py
+│   │   ├── database.py           # Database connection and queries
+│   │   ├── question.py           # Question management
+│   │   └── quiz_state.py         # Quiz game state handling
+│   ├── services/                 # Core services
+│   │   ├── __init__.py
+│   │   ├── irc_service.py        # IRC connection handling
+│   │   ├── mistral_service.py    # AI question generation
+│   │   └── question_service.py   # Question management service
+│   ├── utils/                    # Utility functions
+│   │   ├── __init__.py
+│   │   ├── answer_normalizer.py  # Answer validation
+│   │   ├── scoring.py            # Points calculation
+│   │   ├── text_processing.py    # Text manipulation utilities
+│   │   └── validators.py         # Input validation
+│   ├── __init__.py
+│   ├── bot.py                    # Main bot class
+│   ├── config.py                 # Configuration handling
+│   ├── game_manager.py           # Game state management
+│   └── main.py                   # Entry point
+├── .env                          # Environment configuration
+├── requirements.txt              # Python dependencies
+├── setup.py                      # Package setup
 ```
 
 ### Adding New Features
