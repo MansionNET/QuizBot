@@ -1,51 +1,45 @@
-# QuizBot
+# QuizBot for IRC
 
-An IRC-based trivia bot powered by Mistral AI for dynamic question generation. QuizBot creates engaging quiz games with automatically generated questions across various categories, featuring scoring systems, player statistics, and multiplayer support.
+A sophisticated IRC quiz bot powered by Mistral AI that delivers engaging trivia games with dynamic question generation and rich features.
 
-## IRC Server Details
+## 🌐 IRC Server Details
 
 Join us on MansionNET IRC to chat with us, test the bot, and play some trivia! 
 
-🌐 **Server:** irc.inthemansion.com  
-🔒 **Port:** 6697 (SSL)  
-📝 **Channel:** #opers, #general, #welcome, #devs (and many others)
+- **Server:** irc.inthemansion.com  
+- **Port:** 6697 (SSL)  
+- **Channel:** #opers, #general, #welcome, #devs (and many others)
 
-## Features
+## 🌟 Features
 
-- **Dynamic Question Generation**: Uses Mistral AI to create unique, contextually relevant questions
-- **Multiple Categories**: Covers science, history, geography, arts, sports, technology, nature, space, literature, and music
-- **Scoring System**: Features streak multipliers and speed-based scoring
-- **Player Statistics**: Tracks scores, correct answers, best streaks, and fastest answers
-- **Admin Controls**: Moderation tools for game management
-- **Persistent Storage**: SQLite database for questions and player stats
-- **Rate Limiting**: Smart token bucket implementation for API calls
+- **AI-Powered Questions**: Uses Mistral AI to generate unique, engaging questions across multiple categories
+- **Dynamic Game System**: Run multiple concurrent quiz games in different IRC channels
+- **Smart Scoring**: Points system based on answer speed and winning streaks
+- **Rich Categories**: Questions from various domains including geography, history, science, arts, entertainment, sports, and more
+- **Player Statistics**: Track player performance, streaks, and maintain leaderboards
+- **Fallback System**: Built-in backup questions ensure continuous operation even if AI service is unavailable
 
-## Commands
+## 🚀 Getting Started
 
-- `!quiz` - Start a new quiz game
-- `!stats` - Show your statistics
-- `!leaderboard` - Show top players
-- `!help` - Display help message
-- `!stop` - Stop the current game (admin only)
+### Prerequisites
 
-## Requirements
-
-- Python 3.9+
+- Python 3.10 or higher
+- SQLite3
 - Mistral AI API key
 - IRC server access
 
-## Installation
+### Installation
 
 1. Clone the repository:
 ```bash
 git clone https://github.com/mansionNET/QuizBot.git
-cd QuizBot
+cd quizbot_mansionnet
 ```
 
 2. Create and activate a virtual environment:
 ```bash
 python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
+source venv/bin/activate  # On Windows use: venv\Scripts\activate
 ```
 
 3. Install dependencies:
@@ -53,73 +47,120 @@ source venv/bin/activate  # On Windows: venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-4. Create a `.env` file with your configuration:
-```env
-IRC_SERVER=irc.example.com
-IRC_PORT=6697
-IRC_NICKNAME=QuizBot
-IRC_CHANNELS=#channel1,#channel2
-ADMIN_USERS=admin1,admin2
-MISTRAL_API_KEY=your_api_key_here
-DATABASE_URL=sqlite:///quiz.db
+4. Copy the example environment file:
+```bash
+cp .env.example .env
 ```
 
-## Usage
+5. Edit `.env` with your configuration:
+```env
+MISTRAL_API_KEY=your_api_key_here
+IRC_SERVER=irc.libera.chat
+IRC_PORT=6667
+IRC_NICKNAME=QuizBot
+IRC_CHANNELS=#yourchannel
+ADMIN_USERS=admin1,admin2
+QUESTIONS_PER_GAME=10
+QUESTION_TIMEOUT=30
+MIN_QUESTIONS=20
+```
 
-1. Ensure your `.env` file is configured correctly
-2. Run the bot:
+### Running the Bot
+
+Start the bot:
 ```bash
 python src/main.py
 ```
 
-## Project Structure
+## 🎮 Game Commands
 
+- `!quiz` - Start a new quiz game
+- `!help` - Show available commands
+- `!stats` - Display your game statistics
+- `!leaderboard` - Show top players
+- `!stop` - Stop the current game (admin only)
+
+## 🎯 Game Rules
+
+1. Each game consists of a configurable number of questions (default: 10)
+2. Players have a limited time to answer each question (default: 30 seconds)
+3. Points are awarded based on:
+   - Speed of answer (faster = more points)
+   - Answer streak (consecutive correct answers multiply points)
+4. Only the first correct answer for each question counts
+5. Multiple answer formats are accepted for flexibility
+
+## 🛠️ Configuration
+
+Key configuration options in `.env`:
+
+- `QUESTIONS_PER_GAME`: Number of questions per game session
+- `QUESTION_TIMEOUT`: Seconds allowed for answering each question
+- `MIN_QUESTIONS`: Minimum questions to keep in database
+- `BASE_POINTS`: Base points for correct answers
+- `SPEED_MULTIPLIER_MAX`: Maximum multiplier for quick answers
+
+## 📚 Question Categories
+
+- Geography
+- History
+- Science
+- Arts
+- Entertainment
+- Sports
+- Food & Drink
+- Nature
+
+## 🧩 Technical Architecture
+
+- **IRC Service**: Handles IRC connection and message routing
+- **Game Manager**: Manages game states and player interactions
+- **Question Service**: Generates and manages questions using Mistral AI
+- **Database**: SQLite storage for questions and player statistics
+- **Utilities**: Answer validation, scoring, and text processing
+
+## 🔧 Development
+
+### Project Structure
 ```
-quizbot/
+quizbot_mansionnet/
 ├── src/
-│   ├── models/
-│   │   ├── database.py
-│   │   ├── question.py
-│   │   └── quiz_state.py
-│   ├── services/
-│   │   ├── irc_service.py
-│   │   └── mistral_service.py
-│   ├── utils/
-│   │   ├── scoring.py
-│   │   └── text_processing.py
-│   ├── bot.py
-│   ├── config.py
-│   ├── game_manager.py
-│   └── main.py
-├── .env.example
-├── .gitignore
-├── LICENSE
-├── README.md
-└── requirements.txt
+│   ├── models/         # Data models
+│   ├── services/       # Core services
+│   ├── utils/          # Utility functions
+│   ├── bot.py         # Main bot class
+│   ├── config.py      # Configuration handling
+│   └── main.py        # Entry point
+├── tests/             # Test suite
+├── requirements.txt   # Dependencies
+└── setup.py          # Package setup
 ```
 
-## Configuration Options
-
-- `QUESTION_TIMEOUT`: Time allowed for answering each question (default: 30 seconds)
-- `MIN_ANSWER_TIME`: Minimum time between answers to prevent spam (default: 1.0 seconds)
-- `BASE_POINTS`: Base points for correct answers (default: 100)
-- `QUESTIONS_PER_GAME`: Number of questions per game (default: 10)
-- `SPEED_MULTIPLIER_MAX`: Maximum speed bonus multiplier (default: 2.0)
-
-## Contributing
+### Adding New Features
 
 1. Fork the repository
-2. Create your feature branch (`git checkout -b feature/AmazingFeature`)
-3. Commit your changes (`git commit -m 'Add some AmazingFeature'`)
-4. Push to the branch (`git push origin feature/AmazingFeature`)
-5. Open a Pull Request
+2. Create a feature branch
+3. Add your changes
+4. Write/update tests
+5. Submit a pull request
 
-## License
+## 📝 License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+This project is licensed under the MIT License - see the LICENSE file for details.
 
-## Acknowledgments
+## 🤝 Contributing
 
-- Built with [Mistral AI](https://mistral.ai/) for question generation
-- Uses [Python IRC](https://python-irc.readthedocs.io/) for IRC connectivity
-- SQLAlchemy for database management
+Contributions are welcome! Please feel free to submit a Pull Request.
+
+## 🙏 Acknowledgments
+
+- Mistral AI for the question generation capabilities
+- IRC community for testing and feedback
+- All contributors and users
+
+## 📞 Support
+
+For support, please:
+1. Check existing issues
+2. Create a new issue with detailed description
+3. Join our IRC channel for direct help
