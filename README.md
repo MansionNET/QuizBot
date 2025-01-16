@@ -55,8 +55,8 @@ cp .env.example .env
 5. Edit `.env` with your configuration:
 ```env
 MISTRAL_API_KEY=your_api_key_here
-IRC_SERVER=irc.libera.chat
-IRC_PORT=6667
+IRC_SERVER=irc.inthemansion.chat
+IRC_PORT=6697
 IRC_NICKNAME=QuizBot
 IRC_CHANNELS=#yourchannel
 ADMIN_USERS=admin1,admin2
