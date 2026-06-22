@@ -1,3 +1,16 @@
+> # ⚠️ This repository has moved
+>
+> **QuizBot** is now developed at **[git.inthemansion.com/MansionNET/QuizBot](https://git.inthemansion.com/MansionNET/QuizBot)**.
+>
+> This GitHub copy is **archived and read-only** — it will not receive further updates.
+> Please update your remotes:
+>
+> ```
+> git remote set-url origin git@git.inthemansion.com:MansionNET/QuizBot.git
+> ```
+
+---
+
 # QuizBot for IRC
 
 A sophisticated IRC quiz bot powered by Mistral AI that delivers engaging trivia games with dynamic question generation and rich features.
